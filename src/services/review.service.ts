@@ -1,4 +1,4 @@
-import type { HydratedDocument } from "mongoose";
+﻿import type { HydratedDocument } from "mongoose";
 import type { ICompany } from "../models/Company.js";
 import type { IReview } from "../models/Review.js";
 import { Company } from "../models/Company.js";
@@ -7,13 +7,11 @@ import { Review } from "../models/Review.js";
 import { HttpError } from "../utils/httpError.js";
 import { sendWhatsapp } from "./whatsapp.service.js";
 import { buildReminderSchedule } from "./company.service.js";
+import { cleanAnswerValue, getCompanyFeedbackFormConfig, getEnabledField } from "./feedbackForm.service.js";
 
 type ReviewInput = {
-  customerName?: string;
-  customerPhone?: string;
   serviceFeedback?: string;
-  improvementSuggestion?: string;
-  badExperience?: string;
+  customAnswers?: Array<{ questionId: string; value: unknown }>;
   rating: number;
 };
 
@@ -33,13 +31,15 @@ function reviewWhatsappBody(
     `Note: ${review.rating}/5`,
   ];
 
-  if (review.customerName) lines.push(`Nom: ${review.customerName}`);
-  if (review.customerPhone) lines.push(`Téléphone: ${review.customerPhone}`);
-  if (review.serviceFeedback) lines.push(`Services: ${review.serviceFeedback}`);
-  if (review.improvementSuggestion)
-    lines.push(`À améliorer: ${review.improvementSuggestion}`);
-  if (review.badExperience)
-    lines.push(`Mauvaise expérience: ${review.badExperience}`);
+  if (review.serviceFeedback) lines.push(`Expérience: ${review.serviceFeedback}`);
+
+  if (Array.isArray(review.customAnswers)) {
+    for (const answer of review.customAnswers) {
+      if (answer?.label && answer.value !== undefined && answer.value !== "") {
+        lines.push(`${answer.label}: ${answer.value}`);
+      }
+    }
+  }
 
   return lines.join("\n");
 }
@@ -49,14 +49,15 @@ export async function createReviewAndNotify(
   payload: ReviewInput,
   qrCode?: HydratedDocument<ICompanyQrCode>,
 ) {
+  const formConfig = getCompanyFeedbackFormConfig(company);
+  const customAnswers = normalizeCustomAnswers(formConfig.customQuestions, payload.customAnswers || []);
+  validateRequiredAnswers(formConfig, payload, customAnswers);
+
   const review = await Review.create({
     company: company._id,
     qrCode: qrCode?._id,
-    customerName: payload.customerName,
-    customerPhone: payload.customerPhone,
-    serviceFeedback: payload.serviceFeedback,
-    improvementSuggestion: payload.improvementSuggestion,
-    badExperience: payload.badExperience,
+    serviceFeedback: getEnabledField(formConfig, "serviceFeedback") ? payload.serviceFeedback : undefined,
+    customAnswers,
     rating: payload.rating,
   });
 
@@ -124,6 +125,48 @@ export async function createReviewForCompany(
   if (!qrCompany) throw new HttpError(404, "Entreprise introuvable.");
 
   return createReviewAndNotify(qrCompany, payload, qrCode);
+}
+
+function normalizeCustomAnswers(
+  questions: ReturnType<typeof getCompanyFeedbackFormConfig>["customQuestions"],
+  answers: Array<{ questionId: string; value: unknown }>,
+) {
+  const answerById = new Map(answers.map((answer) => [answer.questionId, answer.value]));
+  return questions
+    .map((question) => {
+      const rawValue = answerById.get(question.id);
+      const hasRawValue = rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== "";
+      const value = cleanAnswerValue(question.type, rawValue);
+      if (hasRawValue && value === undefined) {
+        throw new HttpError(400, `${question.label} est invalide.`);
+      }
+      return {
+        questionId: question.id,
+        label: question.label,
+        type: question.type,
+        value,
+      };
+    })
+    .filter((answer) => answer.value !== undefined && answer.value !== "");
+}
+
+function validateRequiredAnswers(
+  config: ReturnType<typeof getCompanyFeedbackFormConfig>,
+  payload: ReviewInput,
+  customAnswers: Array<{ questionId: string; value: unknown }>,
+) {
+  for (const field of config.fields) {
+    if (!field.enabled || !field.required) continue;
+    const value = payload[field.key as keyof ReviewInput];
+    if (!String(value || "").trim()) throw new HttpError(400, `${field.label} est requis.`);
+  }
+
+  const customAnswerIds = new Set(customAnswers.map((answer) => answer.questionId));
+  for (const question of config.customQuestions) {
+    if (question.required && !customAnswerIds.has(question.id)) {
+      throw new HttpError(400, `${question.label} est requis.`);
+    }
+  }
 }
 
 async function markLimitReached(company: HydratedDocument<ICompany>) {

@@ -3,11 +3,13 @@ import mongoose, { type InferSchemaType, type Types } from 'mongoose';
 const reviewSchema = new mongoose.Schema({
   company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   qrCode: { type: mongoose.Schema.Types.ObjectId, ref: 'CompanyQrCode', index: true },
-  customerName: { type: String, trim: true },
-  customerPhone: { type: String, trim: true },
   serviceFeedback: { type: String, trim: true },
-  improvementSuggestion: { type: String, trim: true },
-  badExperience: { type: String, trim: true },
+  customAnswers: [{
+    questionId: { type: String, required: true },
+    label: { type: String, required: true, trim: true },
+    type: { type: String, enum: ['text', 'textarea', 'rating', 'select', 'email', 'phone'], required: true },
+    value: { type: mongoose.Schema.Types.Mixed }
+  }],
   rating: { type: Number, required: true, min: 1, max: 5 },
   notifiedAt: { type: Date },
   notificationStatus: {

@@ -38,3 +38,11 @@ export async function getRatingDistribution(req: Request, res: Response) {
   );
   res.json(data);
 }
+
+export async function getFeedbackFormConfig(req: Request, res: Response) {
+  res.json(dashboardService.getFeedbackFormConfig(req.company));
+}
+
+export async function updateFeedbackFormConfig(req: Request, res: Response) {
+  res.json(await dashboardService.updateFeedbackFormConfig(req.company, req.body));
+}

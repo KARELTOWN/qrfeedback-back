@@ -1,8 +1,9 @@
-import ExcelJS from 'exceljs';
+﻿import ExcelJS from 'exceljs';
 import type { HydratedDocument } from 'mongoose';
 import type { ICompany } from '../models/Company.js';
 import { Review } from '../models/Review.js';
 import { buildPagination, normalizePagination, type PaginationInput } from '../utils/pagination.js';
+import { getCompanyFeedbackFormConfig, sanitizeFeedbackFormConfig } from './feedbackForm.service.js';
 
 export async function getCompanyReviews(company: HydratedDocument<ICompany>, input: PaginationInput = {}) {
   const pagination = normalizePagination(input);
@@ -49,32 +50,45 @@ export async function buildCompanyReviewsExcel(company: HydratedDocument<ICompan
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Avis');
+  const customQuestionColumns = new Map<string, { header: string; key: string }>();
+
+  for (const review of reviews) {
+    for (const answer of review.customAnswers || []) {
+      if (!answer?.questionId || !answer?.label) continue;
+      if (!customQuestionColumns.has(answer.questionId)) {
+        customQuestionColumns.set(answer.questionId, {
+          header: answer.label,
+          key: `custom_${customQuestionColumns.size}`
+        });
+      }
+    }
+  }
 
   sheet.columns = [
     { header: 'Date', key: 'createdAt', width: 18 },
-    { header: 'Nom du client', key: 'customerName', width: 24 },
-    { header: 'Téléphone', key: 'customerPhone', width: 18 },
     { header: 'Note', key: 'rating', width: 10 },
-    { header: 'Avis sur les services', key: 'serviceFeedback', width: 45 },
-    { header: 'À améliorer', key: 'improvementSuggestion', width: 45 },
-    { header: 'Mauvaise expérience', key: 'badExperience', width: 45 },
+    { header: 'Expérience', key: 'serviceFeedback', width: 45 },
+    ...Array.from(customQuestionColumns.values()).map((column) => ({ ...column, width: 28 })),
     { header: 'Statut notification', key: 'notificationStatus', width: 22 },
     { header: 'QR Code', key: 'qrCode', width: 24 }
   ];
 
   for (const review of reviews) {
     const qrCode = review.qrCode as { label?: string; whatsappNumber?: string } | undefined;
-    sheet.addRow({
+    const row: Record<string, unknown> = {
       createdAt: review.createdAt ? new Date(review.createdAt).toLocaleString('fr-FR') : '',
-      customerName: review.customerName || '',
-      customerPhone: review.customerPhone || '',
       rating: review.rating,
       serviceFeedback: review.serviceFeedback || '',
-      improvementSuggestion: review.improvementSuggestion || '',
-      badExperience: review.badExperience || '',
       notificationStatus: review.notificationStatus,
       qrCode: qrCode ? `${qrCode.label || 'QR'} - ${qrCode.whatsappNumber || ''}` : ''
-    });
+    };
+
+    for (const answer of review.customAnswers || []) {
+      const column = customQuestionColumns.get(answer.questionId);
+      if (column) row[column.key] = answer.value ?? '';
+    }
+
+    sheet.addRow(row);
   }
 
   sheet.getRow(1).font = { bold: true };
@@ -94,7 +108,6 @@ export async function buildCompanyReviewsExcel(company: HydratedDocument<ICompan
 
   return workbook.xlsx.writeBuffer();
 }
-
 export async function getMonthlyReviewEvolution(company: HydratedDocument<ICompany>, years: number[]) {
   const currentYear = new Date().getFullYear();
   const safeYears = years.length ? years : [currentYear];
@@ -142,4 +155,14 @@ export async function getRatingDistribution(company: HydratedDocument<ICompany>,
     rating,
     count: rows.find((item) => item._id === rating)?.count || 0
   }));
+}
+
+export function getFeedbackFormConfig(company: HydratedDocument<ICompany>) {
+  return getCompanyFeedbackFormConfig(company);
+}
+
+export async function updateFeedbackFormConfig(company: HydratedDocument<ICompany>, payload: unknown) {
+  company.set('feedbackFormConfig', sanitizeFeedbackFormConfig(payload, company.name));
+  await company.save();
+  return getCompanyFeedbackFormConfig(company);
 }

@@ -11,7 +11,8 @@
     "type-check": "tsc --noEmit",
     "generate:encryption-key": "tsx src/scripts/generate-encryption-key.ts",
     "secret:set": "tsx src/scripts/set-secret.ts",
-    "secret:list": "tsx src/scripts/list-secrets.ts"
+    "secret:list": "tsx src/scripts/list-secrets.ts",
+    "cleanup:feedback-legacy": "tsx src/scripts/cleanup-feedback-legacy-fields.ts"
   },
   "dependencies": {
     "@json2csv/plainjs": "^7.0.6",

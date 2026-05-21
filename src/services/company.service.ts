@@ -4,6 +4,7 @@ import { CompanyQrCode } from '../models/CompanyQrCode.js';
 import { Review } from '../models/Review.js';
 import { HttpError } from '../utils/httpError.js';
 import { createSlug } from '../utils/slug.js';
+import { getCompanyFeedbackFormConfig } from './feedbackForm.service.js';
 import { generateQrDataUrl } from './qr.service.js';
 import { buildQrPdfBuffer } from './pdf.service.js';
 import { sendMail } from './mail.service.js';
@@ -72,19 +73,27 @@ export async function registerCompany({ name, email, whatsappNumber }: RegisterC
 }
 
 export async function getPublicCompany(slug: string) {
-  const company = await Company.findOne({ slug }).select('name slug feedbackUrl');
-  if (company) return company;
+  const company = await Company.findOne({ slug }).select('name slug feedbackUrl feedbackFormConfig');
+  if (company) {
+    return {
+      name: company.name,
+      slug: company.slug,
+      feedbackUrl: company.feedbackUrl,
+      feedbackFormConfig: getCompanyFeedbackFormConfig(company)
+    };
+  }
 
   const qrCode = await CompanyQrCode.findOne({ slug });
   if (!qrCode) throw new HttpError(404, 'Entreprise introuvable.');
 
-  const qrCompany = await Company.findById(qrCode.company).select('name');
+  const qrCompany = await Company.findById(qrCode.company).select('name feedbackFormConfig');
   if (!qrCompany) throw new HttpError(404, 'Entreprise introuvable.');
 
   return {
     name: qrCompany.name,
     slug: qrCode.slug,
-    feedbackUrl: qrCode.feedbackUrl
+    feedbackUrl: qrCode.feedbackUrl,
+    feedbackFormConfig: getCompanyFeedbackFormConfig(qrCompany)
   };
 }
 
