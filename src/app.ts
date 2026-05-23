@@ -13,7 +13,11 @@ import paymentRoutes from './routes/payment.routes.js';
 import planRoutes from './routes/plan.routes.js';
 import secretRoutes from './routes/secret.routes.js';
 import qrCodeRoutes from './routes/qrcode.routes.js';
-import twilioWebhookRoutes from './routes/twilioWebhook.routes.js';
+import whatsappConfigRoutes from './routes/whatsappConfig.routes.js';
+import whatsappWebhookRoutes from './routes/whatsappWebhook.routes.js';
+import segmentRoutes from './routes/segment.routes.js';
+import inboxRoutes from './routes/inbox.routes.js';
+import automationRoutes from './routes/automation.routes.js';
 
 export const app = express();
 
@@ -42,6 +46,10 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/secrets', secretRoutes);
 app.use('/api/qrcodes', qrCodeRoutes);
-app.use('/api/webhooks/twilio', twilioWebhookRoutes);
+app.use('/api/whatsapp', whatsappConfigRoutes);
+app.use('/api/webhooks/whatsapp', whatsappWebhookRoutes);
+app.use('/api/segments', segmentRoutes);
+app.use('/api/inbox', inboxRoutes);
+app.use('/api/automations', automationRoutes);
 
 app.use(errorHandler);

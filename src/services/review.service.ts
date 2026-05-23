@@ -1,13 +1,20 @@
 ﻿import type { HydratedDocument } from "mongoose";
+import { env } from "../config/env.js";
 import type { ICompany } from "../models/Company.js";
 import type { IReview } from "../models/Review.js";
 import { Company } from "../models/Company.js";
 import { CompanyQrCode, type ICompanyQrCode } from "../models/CompanyQrCode.js";
+import { ContactActivity } from "../models/ContactActivity.js";
 import { Review } from "../models/Review.js";
+import { WhatsappMessageLog } from "../models/WhatsappMessageLog.js";
 import { HttpError } from "../utils/httpError.js";
-import { sendWhatsapp } from "./whatsapp.service.js";
+import { sendWhatsapp, sendWhatsappTemplate } from "./whatsapp.service.js";
 import { buildReminderSchedule } from "./company.service.js";
 import { cleanAnswerValue, getCompanyFeedbackFormConfig, getEnabledField } from "./feedbackForm.service.js";
+import { addContactToList, upsertContact } from "./contact.service.js";
+import { resolveQrFormListMappingForFeedback } from "./qrFormListMapping.service.js";
+import { dispatchAutomationTrigger } from "./automationTriggerDispatcher.service.js";
+import { appLogger } from "../utils/appLogger.js";
 
 type ReviewInput = {
   serviceFeedback?: string;
@@ -15,8 +22,15 @@ type ReviewInput = {
   rating: number;
 };
 
-type TwilioStatusInput = {
-  messageSid: string;
+type NormalizedAnswer = {
+  questionId: string;
+  label: string;
+  type: 'text' | 'textarea' | 'rating' | 'select' | 'email' | 'phone';
+  value: unknown;
+};
+
+type WhatsappCloudStatusInput = {
+  messageId: string;
   status: string;
   errorCode?: string;
   errorMessage?: string;
@@ -44,6 +58,192 @@ function reviewWhatsappBody(
   return lines.join("\n");
 }
 
+function reviewWhatsappTemplateComponents(
+  company: HydratedDocument<ICompany>,
+  review: HydratedDocument<IReview>,
+) {
+  return [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: company.name },
+        { type: "text", text: `${review.rating}/5` },
+        { type: "text", text: review.serviceFeedback || "-" },
+      ],
+    },
+  ];
+}
+
+function valueToString(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).trim();
+  return text || undefined;
+}
+
+function inferNameField(label: string) {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('prenom') || normalized.includes('prénom') || normalized.includes('first')) return 'first_name';
+  if (normalized.includes('nom') || normalized.includes('last')) return 'last_name';
+  return undefined;
+}
+
+function applyMappedValue(target: {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  whatsapp?: string;
+  rating?: number;
+  tags: string[];
+  customFields: Record<string, unknown>;
+}, key: string, value: unknown) {
+  const text = valueToString(value);
+  if (value === undefined || value === null || value === '') return;
+
+  if (key === 'first_name') target.firstName = target.firstName || text;
+  else if (key === 'last_name') target.lastName = target.lastName || text;
+  else if (key === 'email') target.email = target.email || text;
+  else if (key === 'phone') target.phone = target.phone || text;
+  else if (key === 'whatsapp') target.whatsapp = target.whatsapp || text;
+  else if (key === 'rating') target.rating = Number(value);
+  else if (key === 'tags') {
+    if (Array.isArray(value)) target.tags.push(...value.map(String));
+    else if (text) target.tags.push(...text.split(',').map((tag) => tag.trim()));
+  } else {
+    target.customFields[key] = value;
+  }
+}
+
+function buildContactPayloadFromFeedback({
+  review,
+  customAnswers,
+  fieldMappings
+}: {
+  review: HydratedDocument<IReview>;
+  customAnswers: NormalizedAnswer[];
+  fieldMappings: Array<{ formFieldKey: string; listAttributeKey: string }>;
+}) {
+  const target = {
+    firstName: undefined as string | undefined,
+    lastName: undefined as string | undefined,
+    email: undefined as string | undefined,
+    phone: undefined as string | undefined,
+    whatsapp: undefined as string | undefined,
+    rating: review.rating,
+    tags: [] as string[],
+    customFields: {} as Record<string, unknown>
+  };
+  const answerById = new Map(customAnswers.map((answer) => [answer.questionId, answer]));
+
+  for (const mapping of fieldMappings) {
+    const key = mapping.listAttributeKey.trim().toLowerCase();
+    if (mapping.formFieldKey === 'rating') applyMappedValue(target, key, review.rating);
+    else if (mapping.formFieldKey === 'serviceFeedback') applyMappedValue(target, key, review.serviceFeedback);
+    else {
+      const answer = answerById.get(mapping.formFieldKey);
+      if (answer) applyMappedValue(target, key, answer.value);
+    }
+  }
+
+  for (const answer of customAnswers) {
+    if (answer.type === 'email' && !target.email) target.email = valueToString(answer.value);
+    if (answer.type === 'phone') {
+      if (!target.whatsapp) target.whatsapp = valueToString(answer.value);
+      if (!target.phone) target.phone = valueToString(answer.value);
+    }
+
+    const inferredNameField = inferNameField(answer.label);
+    if (inferredNameField) applyMappedValue(target, inferredNameField, answer.value);
+  }
+
+  target.customFields.rating = review.rating;
+  if (review.serviceFeedback) target.customFields.service_feedback = review.serviceFeedback;
+  for (const answer of customAnswers) {
+    target.customFields[answer.questionId] = answer.value;
+  }
+
+  return target;
+}
+
+async function syncReviewContactAndList({
+  company,
+  review,
+  qrCode,
+  customAnswers
+}: {
+  company: HydratedDocument<ICompany>;
+  review: HydratedDocument<IReview>;
+  qrCode?: HydratedDocument<ICompanyQrCode>;
+  customAnswers: NormalizedAnswer[];
+}) {
+  const mapping = await resolveQrFormListMappingForFeedback(company, qrCode);
+  if (!mapping.autoCreateContact && !mapping.autoAddToList) return;
+
+  const contactPayload = buildContactPayloadFromFeedback({
+    review,
+    customAnswers,
+    fieldMappings: (mapping.fieldMappings || []).map((fieldMapping) => ({
+      formFieldKey: fieldMapping.formFieldKey,
+      listAttributeKey: fieldMapping.listAttributeKey
+    }))
+  });
+
+  const { contact } = await upsertContact({
+    company,
+    ...contactPayload,
+    source: 'qr_feedback',
+    lastFeedbackAt: review.createdAt || new Date()
+  });
+
+  review.contact = contact._id;
+
+  if (mapping.autoAddToList) {
+    const { list } = await addContactToList({
+      company,
+      contact,
+      listId: mapping.list,
+      attributes: contactPayload.customFields
+    });
+    review.contactList = list._id;
+  }
+
+  await review.save();
+}
+
+function buildAutomationContext({
+  company,
+  review,
+  qrCode,
+  customAnswers
+}: {
+  company: HydratedDocument<ICompany>;
+  review: HydratedDocument<IReview>;
+  qrCode?: HydratedDocument<ICompanyQrCode>;
+  customAnswers: NormalizedAnswer[];
+}) {
+  const customFields = Object.fromEntries(customAnswers.map((answer) => [answer.questionId, answer.value]));
+  return {
+    company_id: String(company._id),
+    feedback_id: String(review._id),
+    form_id: qrCode ? String(qrCode._id) : undefined,
+    qr_code_id: qrCode ? String(qrCode._id) : undefined,
+    contact_id: review.contact ? String(review.contact) : undefined,
+    list_id: review.contactList ? String(review.contactList) : undefined,
+    rating: review.rating,
+    submitted_at: review.createdAt || new Date(),
+    feedback: {
+      id: String(review._id),
+      rating: review.rating,
+      serviceFeedback: review.serviceFeedback,
+      customAnswers
+    },
+    contact: {
+      id: review.contact ? String(review.contact) : undefined
+    },
+    custom_fields: customFields
+  };
+}
+
 export async function createReviewAndNotify(
   company: HydratedDocument<ICompany>,
   payload: ReviewInput,
@@ -59,6 +259,23 @@ export async function createReviewAndNotify(
     serviceFeedback: getEnabledField(formConfig, "serviceFeedback") ? payload.serviceFeedback : undefined,
     customAnswers,
     rating: payload.rating,
+  });
+  appLogger.info('review', 'created', {
+    reviewId: String(review._id),
+    companyId: String(company._id),
+    qrCodeId: qrCode ? String(qrCode._id) : undefined,
+    rating: review.rating
+  });
+
+  await syncReviewContactAndList({ company, review, qrCode, customAnswers });
+  const automationDispatch = await dispatchAutomationTrigger({
+    company,
+    type: 'feedback_submitted',
+    context: buildAutomationContext({ company, review, qrCode, customAnswers })
+  });
+  appLogger.info('review', 'automation dispatched', {
+    reviewId: String(review._id),
+    executionsCount: automationDispatch.executionsCount
   });
 
   const hasFreeCredit = company.freeMessagesUsed < company.freeMessagesLimit;
@@ -79,6 +296,7 @@ export async function createReviewAndNotify(
     await markLimitReached(company);
     review.notificationStatus = "skipped";
     await review.save();
+    appLogger.warn('review:whatsapp', 'skipped: no credits', { reviewId: String(review._id), availableMessages });
     return review;
   }
 
@@ -87,24 +305,54 @@ export async function createReviewAndNotify(
   if (!notificationNumber) {
     review.notificationStatus = "skipped";
     review.notificationError =
-      "Aucun numéro WhatsApp configuré pour cette entreprise.";
+      "Aucun numero WhatsApp configure pour cette entreprise.";
     await review.save();
+    appLogger.warn('review:whatsapp', 'skipped: no notification number', { reviewId: String(review._id) });
     return review;
   }
 
   try {
-    const messageSend = await sendWhatsapp({
-      to: notificationNumber,
-      body: reviewWhatsappBody(company, review),
-    });
+    appLogger.info('review:whatsapp', 'send notification', { reviewId: String(review._id), to: notificationNumber });
+    const messageSend = env.whatsappCloud.reviewTemplateName
+      ? await sendWhatsappTemplate({
+        company,
+        to: notificationNumber,
+        templateName: env.whatsappCloud.reviewTemplateName,
+        languageCode: env.whatsappCloud.reviewTemplateLanguageCode,
+        components: reviewWhatsappTemplateComponents(company, review),
+        contactId: review.contact || undefined,
+      })
+      : await sendWhatsapp({
+        company,
+        to: notificationNumber,
+        body: reviewWhatsappBody(company, review),
+        contactId: review.contact || undefined,
+      });
 
     review.notificationStatus = "queued";
     review.notificationWhatsappNumber = notificationNumber;
-    review.twilioMessageSid = messageSend.sid;
+    review.notificationProvider = "whatsapp_cloud_api";
+    review.notificationProviderMessageId = messageSend.id;
+    review.notificationChargedAt = messageSend.creditChargedAt;
+    if (review.contact) {
+      await ContactActivity.create({
+        company: company._id,
+        contact: review.contact,
+        type: "message_sent",
+        channel: "whatsapp",
+        direction: "outbound",
+        provider: "whatsapp_cloud_api",
+        providerMessageId: messageSend.id,
+        title: "Message WhatsApp envoye",
+        metadata: { reviewId: String(review._id) },
+        occurredAt: new Date()
+      });
+    }
   } catch (error) {
     review.notificationStatus = "failed";
     review.notificationError =
       error instanceof Error ? error.message : "Erreur inconnue";
+    appLogger.error('review:whatsapp', 'send failed', { reviewId: String(review._id), message: review.notificationError });
   }
 
   await review.save();
@@ -180,21 +428,36 @@ async function markLimitReached(company: HydratedDocument<ICompany>) {
   await company.save();
 }
 
-export async function handleTwilioMessageStatus({
-  messageSid,
+export async function handleWhatsappCloudMessageStatus({
+  messageId,
   status,
   errorCode,
   errorMessage,
-}: TwilioStatusInput) {
-  const review = await Review.findOne({ twilioMessageSid: messageSid });
+}: WhatsappCloudStatusInput) {
+  const review = await Review.findOne({
+    notificationProviderMessageId: messageId,
+  });
   if (!review) return { handled: false };
 
   const normalizedStatus = status.toLowerCase();
 
-  if (["sent", "delivered"].includes(normalizedStatus)) {
+  if (["sent", "delivered", "read"].includes(normalizedStatus)) {
     review.notificationStatus =
-      normalizedStatus === "delivered" ? "delivered" : "sent";
+      normalizedStatus === "delivered" || normalizedStatus === "read"
+        ? "delivered"
+        : "sent";
     review.notificationError = undefined;
+
+    if (!review.notificationChargedAt) {
+      const chargedLog = await WhatsappMessageLog.findOne({
+        providerMessageId: messageId,
+        creditChargedAt: { $exists: true },
+        creditRefundedAt: { $exists: false }
+      }).sort({ creditChargedAt: -1 });
+      if (chargedLog?.creditChargedAt) {
+        review.notificationChargedAt = chargedLog.creditChargedAt;
+      }
+    }
 
     if (!review.notificationChargedAt) {
       const company = await Company.findById(review.company);
@@ -206,7 +469,7 @@ export async function handleTwilioMessageStatus({
         } else {
           await markLimitReached(company);
           review.notificationError =
-            "Message envoyÃ© sans crÃ©dit disponible au moment du callback Twilio.";
+            "Message envoyé sans crédit disponible au moment du callback WhatsApp.";
         }
 
         if (!review.notificationError) {
@@ -224,11 +487,11 @@ export async function handleTwilioMessageStatus({
     }
 
     review.notifiedAt = review.notifiedAt || new Date();
-  } else if (["failed", "undelivered"].includes(normalizedStatus)) {
+  } else if (normalizedStatus === "failed") {
     review.notificationStatus = "failed";
     review.notificationError =
-      errorMessage || errorCode || `Twilio status: ${normalizedStatus}`;
-  } else if (["queued", "sending", "accepted"].includes(normalizedStatus)) {
+      errorMessage || errorCode || `WhatsApp status: ${normalizedStatus}`;
+  } else if (["accepted", "queued", "pending"].includes(normalizedStatus)) {
     review.notificationStatus = "queued";
   }
 

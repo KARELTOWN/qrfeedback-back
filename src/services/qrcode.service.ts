@@ -1,4 +1,4 @@
-import type { HydratedDocument } from 'mongoose';
+import type { HydratedDocument, Types } from 'mongoose';
 import { env } from '../config/env.js';
 import type { ICompany } from '../models/Company.js';
 import { CompanyQrCode } from '../models/CompanyQrCode.js';
@@ -6,6 +6,11 @@ import { Review } from '../models/Review.js';
 import { createSlug } from '../utils/slug.js';
 import { buildPagination, normalizePagination, type PaginationInput } from '../utils/pagination.js';
 import { generateQrDataUrl } from './qr.service.js';
+import {
+  ensureDefaultQrFormListMapping,
+  getQrFormListMapping,
+  upsertQrFormListMapping
+} from './qrFormListMapping.service.js';
 
 type CreateCompanyQrCodeInput = {
   company: HydratedDocument<ICompany>;
@@ -45,12 +50,45 @@ export async function createCompanyQrCode({ company, whatsappNumber, label }: Cr
   const feedbackUrl = `${env.frontendUrl}/avis/${slug}`;
   const qrCodeDataUrl = await generateQrDataUrl(feedbackUrl);
 
-  return CompanyQrCode.create({
+  const qrCode = await CompanyQrCode.create({
     company: company._id,
     whatsappNumber,
     label,
     slug,
     feedbackUrl,
     qrCodeDataUrl
+  });
+  await ensureDefaultQrFormListMapping(company, qrCode);
+  return qrCode;
+}
+
+export function getQrCodeListMapping(company: HydratedDocument<ICompany>, qrCodeId: string) {
+  return getQrFormListMapping(company, qrCodeId);
+}
+
+export function upsertQrCodeListMapping(
+  company: HydratedDocument<ICompany>,
+  qrCodeId: string,
+  input: {
+    listId?: string;
+    fieldMappings?: Array<{
+      formFieldKey: string;
+      formFieldLabel?: string;
+      listAttributeKey: string;
+      createIfMissing?: boolean;
+    }>;
+    autoCreateContact?: boolean;
+    autoAddToList?: boolean;
+    createdBy?: Types.ObjectId | string;
+  }
+) {
+  return upsertQrFormListMapping({
+    company,
+    qrCodeId,
+    listId: input.listId,
+    fieldMappings: input.fieldMappings,
+    autoCreateContact: input.autoCreateContact,
+    autoAddToList: input.autoAddToList,
+    createdBy: input.createdBy
   });
 }

@@ -10,6 +10,7 @@ import { hashPassword, hashToken, verifyPassword } from '../utils/password.js';
 import { generateQrDataUrl } from './qr.service.js';
 import { sendMail } from './mail.service.js';
 import { readFileSecret } from './fileSecret.service.js';
+import { ensureDefaultContactList } from './contactList.service.js';
 
 type SignupInput = {
   companyName?: string;
@@ -139,6 +140,7 @@ export async function signup({ companyName, email, password }: SignupInput) {
 
   company.user = user._id;
   await company.save();
+  await ensureDefaultContactList(company, user._id);
   await user.populate('company');
   await sendOtp(user, 'signup');
 

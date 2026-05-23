@@ -18,11 +18,12 @@ export const env = {
     pass: process.env.SMTP_PASS,
     from: process.env.MAIL_FROM || 'QR Feedback <no-reply@example.com>'
   },
-  twilio: {
-    accountSid: process.env.TWILIO_ACCOUNT_SID,
-    authToken: process.env.TWILIO_AUTH_TOKEN,
-    from: process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+2290199997478',
-    statusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL
+  whatsappCloud: {
+    apiBaseUrl: process.env.WHATSAPP_CLOUD_API_BASE_URL || 'https://graph.facebook.com',
+    graphApiVersion: process.env.WHATSAPP_CLOUD_API_VERSION || 'v23.0',
+    webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '',
+    reviewTemplateName: process.env.WHATSAPP_REVIEW_TEMPLATE_NAME || '',
+    reviewTemplateLanguageCode: process.env.WHATSAPP_REVIEW_TEMPLATE_LANGUAGE_CODE || 'fr'
   },
   monero: {
     walletAddress: process.env.MONERO_WALLET_ADDRESS || '',

@@ -25,6 +25,7 @@ export async function processDueReminders(now = new Date()) {
     for (const reminder of company.reminderSchedule) {
       if (!reminder.sentAt && reminder.dueAt <= now) {
         await sendWhatsapp({
+          company,
           to: company.whatsappNumber,
           body: `Votre forfait gratuit QR Feedback est épuisé. Connectez-vous pour acheter un forfait et continuer à recevoir vos avis WhatsApp: ${company.feedbackUrl.replace('/avis/', '/paiement/')}`
         });

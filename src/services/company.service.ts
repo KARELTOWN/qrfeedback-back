@@ -8,6 +8,7 @@ import { getCompanyFeedbackFormConfig } from './feedbackForm.service.js';
 import { generateQrDataUrl } from './qr.service.js';
 import { buildQrPdfBuffer } from './pdf.service.js';
 import { sendMail } from './mail.service.js';
+import { ensureDefaultContactList } from './contactList.service.js';
 
 type RegisterCompanyInput = {
   name: string;
@@ -56,6 +57,7 @@ export async function registerCompany({ name, email, whatsappNumber }: RegisterC
     qrCodeDataUrl,
     freeMessagesLimit: env.freeWhatsappMessages
   });
+  await ensureDefaultContactList(company);
 
   const pdf = await buildQrPdfBuffer({ companyName: name, feedbackUrl, qrCodeDataUrl });
   await sendMail({

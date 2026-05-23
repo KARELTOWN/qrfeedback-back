@@ -4,8 +4,6 @@ export const secretNames = [
   'jwtSecret',
   'monerooApiKey',
   'monerooWebhookSecret',
-  'twilioAccountSid',
-  'twilioAuthToken',
   'paymentConfirmSecret'
 ] as const;
 
