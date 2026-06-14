@@ -2,7 +2,7 @@ import type { HydratedDocument } from 'mongoose';
 import type { ICompany } from '../models/Company.js';
 
 export type FeedbackFieldKey = 'serviceFeedback';
-export type CustomQuestionType = 'text' | 'textarea' | 'rating' | 'select' | 'email' | 'phone';
+export type CustomQuestionType = 'text' | 'textarea' | 'rating' | 'select' | 'email' | 'phone' | 'fullName';
 
 export type FeedbackFieldConfig = {
   key: FeedbackFieldKey;
@@ -32,7 +32,7 @@ const fieldDefaults: FeedbackFieldConfig[] = [
 ];
 
 const allowedFieldKeys = new Set(fieldDefaults.map((field) => field.key));
-const allowedQuestionTypes = new Set<CustomQuestionType>(['text', 'textarea', 'rating', 'select', 'email', 'phone']);
+const allowedQuestionTypes = new Set<CustomQuestionType>(['text', 'textarea', 'rating', 'select', 'email', 'phone', 'fullName']);
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phoneRegex = /^\+[1-9]\d{7,14}$/;
 
@@ -131,6 +131,10 @@ export function cleanAnswerValue(type: CustomQuestionType, value: unknown) {
   if (type === 'phone') {
     const phone = String(value || '').replace(/\s/g, '');
     return phoneRegex.test(phone) ? phone : undefined;
+  }
+  if (type === 'fullName') {
+    const fullName = cleanText(value).replace(/\s+/g, ' ');
+    return fullName.length >= 2 ? fullName : undefined;
   }
   return cleanLongText(value);
 }

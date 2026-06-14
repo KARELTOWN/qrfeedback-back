@@ -27,7 +27,7 @@ export async function sendInvoice({ company, payment, temporaryPassword }: SendI
       <p>Bonjour ${company.name},</p>
       <p>Votre paiement a été confirmé.</p>
       <p>Facture : <strong>${payment.invoiceNumber}</strong></p>
-      <p>Forfait : ${payment.messages} messages - ${payment.amountFcfa} FCFA.</p>
+      <p>Forfait : acces illimite a la plateforme QrFeedback - ${payment.amountFcfa} FCFA.</p>
       ${passwordBlock}
     `
   });

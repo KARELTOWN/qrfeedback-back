@@ -1,10 +1,19 @@
 import type { Request, Response } from 'express';
 import * as dashboardService from '../services/dashboard.service.js';
+import * as reviewAnalyticsService from '../services/reviewAnalytics.service.js';
 
 export async function getReviews(req: Request, res: Response) {
   const reviews = await dashboardService.getCompanyReviews(req.company, {
     page: Number(req.query.page),
-    limit: Number(req.query.limit)
+    limit: Number(req.query.limit),
+    contactType: req.query.contactType ? String(req.query.contactType) : undefined,
+    contactValue: req.query.contactValue ? String(req.query.contactValue) : undefined,
+    query: req.query.q ? String(req.query.q) : undefined,
+    rating: req.query.rating ? Number(req.query.rating) : undefined,
+    sentiment: req.query.sentiment ? String(req.query.sentiment) as 'positive' | 'neutral' | 'negative' : undefined,
+    notificationStatus: req.query.notificationStatus ? String(req.query.notificationStatus) : undefined,
+    startDate: req.query.startDate ? String(req.query.startDate) : undefined,
+    endDate: req.query.endDate ? String(req.query.endDate) : undefined
   });
   res.json(reviews);
 }
@@ -45,4 +54,35 @@ export async function getFeedbackFormConfig(req: Request, res: Response) {
 
 export async function updateFeedbackFormConfig(req: Request, res: Response) {
   res.json(await dashboardService.updateFeedbackFormConfig(req.company, req.body));
+}
+
+export async function getNotificationPreferences(req: Request, res: Response) {
+  res.json(dashboardService.getNotificationPreferences(req.company));
+}
+
+export async function updateNotificationPreferences(req: Request, res: Response) {
+  res.json(await dashboardService.updateNotificationPreferences(req.company, req.body));
+}
+
+export async function getAiOverview(req: Request, res: Response) {
+  res.json(await reviewAnalyticsService.getAiOverview(req.company, {
+    qrCodeId: req.query.qrCodeId ? String(req.query.qrCodeId) : undefined,
+    startDate: req.query.startDate ? String(req.query.startDate) : undefined,
+    endDate: req.query.endDate ? String(req.query.endDate) : undefined
+  }));
+}
+
+export async function searchAiReviews(req: Request, res: Response) {
+  res.json(await reviewAnalyticsService.searchAiReviews(req.company, {
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    query: req.query.q ? String(req.query.q) : undefined,
+    qrCodeId: req.query.qrCodeId ? String(req.query.qrCodeId) : undefined,
+    startDate: req.query.startDate ? String(req.query.startDate) : undefined,
+    endDate: req.query.endDate ? String(req.query.endDate) : undefined
+  }));
+}
+
+export async function reindexAiReviews(req: Request, res: Response) {
+  res.json(await reviewAnalyticsService.rebuildAiIndex(req.company));
 }

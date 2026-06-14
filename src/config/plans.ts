@@ -1,7 +1,5 @@
 export const plans = [
-  { code: 'starter_100', label: '100 messages', messages: 100, priceFcfa: 5000 },
-  { code: 'growth_500', label: '500 messages', messages: 500, priceFcfa: 25000 },
-  { code: 'pro_1000', label: '1000 messages', messages: 1000, priceFcfa: 40000 }
+  { code: 'unlimited_7500', label: 'Acces illimite QrFeedback', whatsappMessages: 0, emailNotifications: 0, messages: 0, priceFcfa: 7500, unlimited: true }
 ];
 
 export function findPlan(code: string) {

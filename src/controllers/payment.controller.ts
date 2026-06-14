@@ -25,11 +25,8 @@ export async function confirmPayment(req: Request, res: Response) {
 }
 
 export async function verifyPaymentReturn(req: Request, res: Response) {
-  const payment = await paymentService.confirmPaymentReference(String(req.params.id));
+  const transactionId =
+    typeof req.body?.transactionId === 'string' ? req.body.transactionId : undefined;
+  const payment = await paymentService.confirmPaymentReference(String(req.params.id), transactionId);
   res.json({ ok: true, payment });
-}
-
-export async function monerooWebhook(req: Request, res: Response) {
-  await paymentService.processMonerooWebhook(req.body, req.headers['x-moneroo-signature'] as string | undefined);
-  res.sendStatus(200);
 }

@@ -11,7 +11,8 @@ export async function registerCompany(req: Request, res: Response) {
     slug: company.slug,
     feedbackUrl: company.feedbackUrl,
     qrCodeDataUrl: company.qrCodeDataUrl,
-    freeMessagesLimit: company.freeMessagesLimit
+    freeMessagesLimit: company.freeMessagesLimit,
+    freeEmailNotificationsLimit: company.freeEmailNotificationsLimit
   });
 }
 

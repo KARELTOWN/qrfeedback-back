@@ -18,3 +18,8 @@ export async function createQrCode(req: Request, res: Response) {
 
   res.status(201).json(qrCode);
 }
+
+export async function updateQrCodeNotifications(req: Request, res: Response) {
+  const qrCode = await qrCodeService.updateCompanyQrCodeNotifications(req.company, String(req.params.qrCodeId), req.body);
+  res.json(qrCode);
+}

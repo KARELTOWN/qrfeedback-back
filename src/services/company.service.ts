@@ -12,7 +12,7 @@ import { sendMail } from './mail.service.js';
 type RegisterCompanyInput = {
   name: string;
   email: string;
-  whatsappNumber: string;
+  whatsappNumber?: string;
 };
 
 type ReminderScheduleItem = {
@@ -46,15 +46,19 @@ export async function registerCompany({ name, email, whatsappNumber }: RegisterC
   const slug = createSlug(name);
   const feedbackUrl = `${env.frontendUrl}/avis/${slug}`;
   const qrCodeDataUrl = await generateQrDataUrl(feedbackUrl);
+  const normalizedWhatsappNumber = whatsappNumber?.trim() || undefined;
 
   const company = await Company.create({
     name,
     email,
-    whatsappNumber,
+    whatsappNumber: normalizedWhatsappNumber,
     slug,
     feedbackUrl,
     qrCodeDataUrl,
-    freeMessagesLimit: env.freeWhatsappMessages
+    freeMessagesLimit: 0,
+    freeEmailNotificationsLimit: env.freeEmailNotifications,
+    unlimitedAccess: true,
+    unlimitedAccessActivatedAt: new Date()
   });
 
   const pdf = await buildQrPdfBuffer({ companyName: name, feedbackUrl, qrCodeDataUrl });
@@ -64,7 +68,7 @@ export async function registerCompany({ name, email, whatsappNumber }: RegisterC
     html: `
       <p>Bonjour ${name},</p>
       <p>Votre lien de collecte est prêt : <a href="${feedbackUrl}">${feedbackUrl}</a>.</p>
-      <p>Vous bénéficiez de ${env.freeWhatsappMessages} notifications WhatsApp offertes.</p>
+      <p>Vous recevrez les nouveaux avis par email. Connectez-vous ensuite a votre espace QrFeedback pour activer les notifications Telegram.</p>
     `,
     attachments: [{ filename: `qr-code-${slug}.pdf`, content: pdf, contentType: 'application/pdf' }]
   });

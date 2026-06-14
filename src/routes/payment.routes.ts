@@ -14,7 +14,6 @@ const router = Router();
 
 router.post('/', createPaymentValidator, handleValidation, asyncHandler(paymentController.createPayment));
 router.post('/authenticated', requireAuth, createAuthenticatedPaymentValidator, handleValidation, asyncHandler(paymentController.createAuthenticatedPayment));
-router.post('/moneroo/webhook', asyncHandler(paymentController.monerooWebhook));
 router.post('/:id/verify', verifyPaymentReturnValidator, handleValidation, asyncHandler(paymentController.verifyPaymentReturn));
 router.post('/:id/confirm', confirmPaymentValidator, handleValidation, asyncHandler(paymentController.confirmPayment));
 

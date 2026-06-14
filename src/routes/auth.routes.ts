@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import * as authController from '../controllers/auth.controller.js';
+import { env } from '../config/env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
@@ -18,7 +19,8 @@ const router = Router();
 
 const otpRequestLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 3,
+  max: env.otpRequestLimit,
+  skipFailedRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   message: {

@@ -7,7 +7,7 @@ const reviewSchema = new mongoose.Schema({
   customAnswers: [{
     questionId: { type: String, required: true },
     label: { type: String, required: true, trim: true },
-    type: { type: String, enum: ['text', 'textarea', 'rating', 'select', 'email', 'phone'], required: true },
+    type: { type: String, enum: ['text', 'textarea', 'rating', 'select', 'email', 'phone', 'fullName'], required: true },
     value: { type: mongoose.Schema.Types.Mixed }
   }],
   rating: { type: Number, required: true, min: 1, max: 5 },
@@ -19,8 +19,16 @@ const reviewSchema = new mongoose.Schema({
   },
   notificationError: { type: String },
   notificationWhatsappNumber: { type: String, trim: true },
-  twilioMessageSid: { type: String, trim: true, index: true },
-  notificationChargedAt: { type: Date }
+  whatsappMessageId: { type: String, trim: true, index: true },
+  notificationChargedAt: { type: Date },
+  emailNotificationStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'skipped', 'failed'],
+    default: 'pending'
+  },
+  emailNotificationError: { type: String },
+  notificationEmail: { type: String, trim: true },
+  emailNotificationChargedAt: { type: Date }
 }, { timestamps: true });
 
 export type IReview = InferSchemaType<typeof reviewSchema> & {

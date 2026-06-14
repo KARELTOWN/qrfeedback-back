@@ -4,6 +4,7 @@ export const registerCompanyValidator = [
   body('name').trim().isLength({ min: 2, max: 120 }).withMessage('Le nom de l’entreprise doit contenir entre 2 et 120 caractères.'),
   body('email').trim().isEmail().withMessage('Adresse email invalide.').normalizeEmail(),
   body('whatsappNumber')
+    .optional({ values: 'falsy' })
     .trim()
     .matches(/^\+\d{8,15}$/)
     .withMessage('Le numéro WhatsApp doit être au format international, ex: +2290199997478.')

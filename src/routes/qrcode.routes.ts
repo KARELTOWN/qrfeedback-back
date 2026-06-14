@@ -11,5 +11,6 @@ router.use(requireAuth);
 
 router.get('/', asyncHandler(qrCodeController.listQrCodes));
 router.post('/', createQrCodeValidator, handleValidation, asyncHandler(qrCodeController.createQrCode));
+router.patch('/:qrCodeId/notifications', asyncHandler(qrCodeController.updateQrCodeNotifications));
 
 export default router;

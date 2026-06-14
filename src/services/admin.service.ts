@@ -112,7 +112,9 @@ export async function listUsers(input: PaginationInput & { search?: string } = {
   const qrWhatsappByCompany = new Map<string, string>();
   for (const qrCode of qrCodes) {
     const companyId = String(qrCode.company);
-    if (!qrWhatsappByCompany.has(companyId)) qrWhatsappByCompany.set(companyId, qrCode.whatsappNumber);
+    if (qrCode.whatsappNumber && !qrWhatsappByCompany.has(companyId)) {
+      qrWhatsappByCompany.set(companyId, qrCode.whatsappNumber);
+    }
   }
   const reviewsByCompany = new Map(reviewCounts.map((item) => [String(item._id), item.count]));
 
@@ -209,7 +211,9 @@ export async function listQrRequests({
   const qrWhatsappByCompany = new Map<string, string>();
   for (const qrCode of qrCodes) {
     const companyId = String(qrCode.company);
-    if (!qrWhatsappByCompany.has(companyId)) qrWhatsappByCompany.set(companyId, qrCode.whatsappNumber);
+    if (qrCode.whatsappNumber && !qrWhatsappByCompany.has(companyId)) {
+      qrWhatsappByCompany.set(companyId, qrCode.whatsappNumber);
+    }
   }
   const normalizedSearch = search.trim().toLowerCase();
   const requests = companies.map((company) => {

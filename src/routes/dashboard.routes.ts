@@ -13,6 +13,11 @@ router.get('/monthly-evolution', asyncHandler(dashboardController.getMonthlyEvol
 router.get('/rating-distribution', asyncHandler(dashboardController.getRatingDistribution));
 router.get('/feedback-form-config', asyncHandler(dashboardController.getFeedbackFormConfig));
 router.patch('/feedback-form-config', asyncHandler(dashboardController.updateFeedbackFormConfig));
+router.get('/notification-preferences', asyncHandler(dashboardController.getNotificationPreferences));
+router.patch('/notification-preferences', asyncHandler(dashboardController.updateNotificationPreferences));
+router.get('/ai/overview', asyncHandler(dashboardController.getAiOverview));
+router.get('/ai/search', asyncHandler(dashboardController.searchAiReviews));
+router.post('/ai/reindex', asyncHandler(dashboardController.reindexAiReviews));
 router.get('/export.xlsx', asyncHandler(dashboardController.exportExcel));
 
 export default router;

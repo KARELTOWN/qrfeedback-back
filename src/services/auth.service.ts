@@ -124,7 +124,10 @@ export async function signup({ companyName, email, password }: SignupInput) {
     slug,
     feedbackUrl,
     qrCodeDataUrl,
-    freeMessagesLimit: env.freeWhatsappMessages
+    freeMessagesLimit: 0,
+    freeEmailNotificationsLimit: env.freeEmailNotifications,
+    unlimitedAccess: true,
+    unlimitedAccessActivatedAt: new Date()
   });
 
   const user = await User.create({

@@ -8,7 +8,7 @@ import type { ICompany } from '../models/Company.js';
 import { HttpError } from '../utils/httpError.js';
 import { generateStrongPassword, hashPassword } from '../utils/password.js';
 import { createInvoiceNumber, sendInvoice } from './invoice.service.js';
-import { initializePayment, verifyPayment } from './moneroo.service.js';
+import { isKkiapayTransactionSuccessful, verifyKkiapayTransaction } from './kkiapay.service.js';
 
 type CreatePaymentInput = {
   companySlug?: string;
@@ -25,8 +25,6 @@ export async function createPayment({ companySlug, planCode, email }: CreatePaym
 export async function createPaymentForCompany(company: HydratedDocument<ICompany>, planCode: string, email?: string) {
   const plan = findPlan(planCode);
   if (!plan) throw new HttpError(400, 'Forfait invalide.');
-  const moneroWalletAddress = env.monero.walletAddress || 'managed-by-moneroo';
-
   if (email && email.toLowerCase() !== company.email) {
     company.email = email.toLowerCase();
     await company.save();
@@ -36,45 +34,32 @@ export async function createPaymentForCompany(company: HydratedDocument<ICompany
     company: company._id,
     planCode: plan.code,
     messages: plan.messages,
+    whatsappMessages: plan.whatsappMessages,
+    emailNotifications: plan.emailNotifications,
     amountFcfa: plan.priceFcfa,
-    moneroWalletAddress,
-    provider: 'moneroo',
-    currency: env.moneroo.currency
+    provider: 'kkiapay',
+    currency: 'XOF'
   });
-
-  const monerooPayment = await initializePayment({
-    company,
-    paymentId: String(payment._id),
-    amount: payment.amountFcfa,
-    description: `QR Feedback - ${plan.label}`,
-    customerEmail: company.email,
-    customerName: company.name,
-    metadata: {
-      payment_id: String(payment._id),
-      company_id: String(company._id),
-      plan_code: plan.code,
-      messages: String(plan.messages)
-    }
-  });
-
-  payment.providerPaymentId = monerooPayment.providerPaymentId;
-  payment.checkoutUrl = monerooPayment.checkoutUrl;
-  await payment.save();
 
   return {
     id: payment._id,
     status: payment.status,
     amountFcfa: payment.amountFcfa,
-    moneroWalletAddress: payment.moneroWalletAddress,
-    network: env.monero.network,
     provider: payment.provider,
     providerPaymentId: payment.providerPaymentId,
     checkoutUrl: payment.checkoutUrl,
-    currency: payment.currency
+    currency: payment.currency,
+    kkiapay: {
+      publicKey: env.kkiapay.publicKey,
+      sandbox: env.kkiapay.sandbox,
+      amount: payment.amountFcfa,
+      name: company.name,
+      email: company.email
+    }
   };
 }
 
-export async function confirmPayment(paymentId: string) {
+export async function confirmPayment(paymentId: string, transactionId?: string) {
   const payment = await Payment.findById(paymentId);
   if (!payment) throw new HttpError(404, 'Paiement introuvable.');
   if (payment.status === 'paid') return payment;
@@ -82,11 +67,16 @@ export async function confirmPayment(paymentId: string) {
   const company = await Company.findById(payment.company);
   if (!company) throw new HttpError(404, 'Entreprise introuvable.');
 
-  if (payment.provider === 'moneroo' && payment.providerPaymentId) {
-    const verified = await verifyPayment(company, payment.providerPaymentId);
-    if (verified?.status !== 'success') {
-      throw new HttpError(400, 'Paiement Moneroo non confirmé.');
+  if (payment.provider === 'kkiapay') {
+    if (!transactionId) throw new HttpError(400, 'Transaction Kkiapay requise.');
+    const transaction = await verifyKkiapayTransaction(transactionId);
+    if (!isKkiapayTransactionSuccessful(transaction)) {
+      throw new HttpError(400, 'Paiement Kkiapay non confirme.');
     }
+    if (Number(transaction.amount || 0) < payment.amountFcfa) {
+      throw new HttpError(400, 'Montant Kkiapay insuffisant.');
+    }
+    payment.providerPaymentId = transactionId;
   }
 
   let temporaryPassword: string | undefined;
@@ -102,7 +92,8 @@ export async function confirmPayment(paymentId: string) {
     company.user = user._id;
   }
 
-  company.paidMessagesBalance += payment.messages;
+  company.unlimitedAccess = true;
+  company.unlimitedAccessActivatedAt = new Date();
   company.limitReachedAt = undefined;
   company.set('reminderSchedule', []);
   await company.save();
@@ -116,9 +107,9 @@ export async function confirmPayment(paymentId: string) {
   return payment;
 }
 
-export async function confirmPaymentReference(reference: string) {
+export async function confirmPaymentReference(reference: string, transactionId?: string) {
   if (isValidObjectId(reference)) {
-    return confirmPayment(reference);
+    return confirmPayment(reference, transactionId);
   }
 
   return confirmPaymentByProviderId(reference);
@@ -128,32 +119,4 @@ export async function confirmPaymentByProviderId(providerPaymentId: string) {
   const payment = await Payment.findOne({ providerPaymentId });
   if (!payment) throw new HttpError(404, 'Paiement introuvable.');
   return confirmPayment(String(payment._id));
-}
-
-export async function processMonerooWebhook(payload: unknown, signature: string | undefined) {
-  const data = payload && typeof payload === 'object' && 'data' in payload
-    ? (payload as { event?: string; data?: { id?: string; status?: string } })
-    : null;
-
-  const providerPaymentId = data?.data?.id;
-  if (!providerPaymentId) throw new HttpError(400, 'Payload Moneroo invalide.');
-
-  const payment = await Payment.findOne({ providerPaymentId });
-  if (!payment) throw new HttpError(404, 'Paiement introuvable.');
-
-  const company = await Company.findById(payment.company);
-  if (!company) throw new HttpError(404, 'Entreprise introuvable.');
-
-  const { verifyWebhookSignature } = await import('./moneroo.service.js');
-  const signatureIsValid = await verifyWebhookSignature(company, payload, signature);
-  if (!signatureIsValid) throw new HttpError(403, 'Signature Moneroo invalide.');
-
-  if (data.event === 'payment.success' || data.data?.status === 'success') {
-    await confirmPaymentByProviderId(providerPaymentId);
-  }
-
-  if (data.event === 'payment.failed' || data.event === 'payment.cancelled') {
-    payment.status = 'cancelled';
-    await payment.save();
-  }
 }
