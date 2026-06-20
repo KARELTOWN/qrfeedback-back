@@ -12,7 +12,6 @@ export async function listQrCodes(req: Request, res: Response) {
 export async function createQrCode(req: Request, res: Response) {
   const qrCode = await qrCodeService.createCompanyQrCode({
     company: req.company,
-    whatsappNumber: req.body.whatsappNumber,
     label: req.body.label
   });
 
@@ -22,4 +21,29 @@ export async function createQrCode(req: Request, res: Response) {
 export async function updateQrCodeNotifications(req: Request, res: Response) {
   const qrCode = await qrCodeService.updateCompanyQrCodeNotifications(req.company, String(req.params.qrCodeId), req.body);
   res.json(qrCode);
+}
+
+export async function updateQrCode(req: Request, res: Response) {
+  const qrCode = await qrCodeService.updateCompanyQrCode(req.company, String(req.params.qrCodeId), req.body);
+  res.json(qrCode);
+}
+
+export async function disableQrCode(req: Request, res: Response) {
+  const qrCode = await qrCodeService.disableCompanyQrCode(req.company, String(req.params.qrCodeId));
+  res.json(qrCode);
+}
+
+export async function downloadQrCodePng(req: Request, res: Response) {
+  const qrCode = await qrCodeService.getCompanyQrCode(req.company, String(req.params.qrCodeId));
+  const base64 = qrCode.qrCodeDataUrl.split(',')[1] || qrCode.qrCodeDataUrl;
+  res.header('Content-Type', 'image/png');
+  res.attachment(`qr-code-${qrCode.slug}.png`);
+  res.send(Buffer.from(base64, 'base64'));
+}
+
+export async function downloadQrCodePdf(req: Request, res: Response) {
+  const { qrCode, pdf } = await qrCodeService.buildCompanyQrCodePdf(req.company, String(req.params.qrCodeId));
+  res.header('Content-Type', 'application/pdf');
+  res.attachment(`qr-code-${qrCode.slug}.pdf`);
+  res.send(pdf);
 }

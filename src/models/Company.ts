@@ -47,6 +47,8 @@ const customQuestionSchema = new mongoose.Schema(
 const feedbackFormConfigSchema = new mongoose.Schema(
   {
     title: { type: String, trim: true },
+    welcomeTitle: { type: String, trim: true },
+    welcomeMessage: { type: String, trim: true },
     fields: [feedbackFieldSchema],
     customQuestions: [customQuestionSchema],
   },
@@ -55,7 +57,6 @@ const feedbackFormConfigSchema = new mongoose.Schema(
 
 const notificationPreferencesSchema = new mongoose.Schema(
   {
-    whatsappEnabled: { type: Boolean, default: true },
     emailEnabled: { type: Boolean, default: true },
     telegramEnabled: { type: Boolean, default: true },
   },
@@ -67,12 +68,8 @@ const companySchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     slug: { type: String, required: true, unique: true, index: true },
     email: { type: String, required: true, lowercase: true, trim: true },
-    whatsappNumber: { type: String, trim: true, index: true },
     qrCodeDataUrl: { type: String },
     feedbackUrl: { type: String, required: true },
-    freeMessagesLimit: { type: Number, default: 50 },
-    freeMessagesUsed: { type: Number, default: 0 },
-    paidMessagesBalance: { type: Number, default: 0 },
     freeEmailNotificationsLimit: { type: Number, default: 300 },
     freeEmailNotificationsUsed: { type: Number, default: 0 },
     paidEmailNotificationsBalance: { type: Number, default: 0 },

@@ -6,7 +6,7 @@ import { Company } from '../models/Company.js';
 import { User, type IUser } from '../models/User.js';
 import { HttpError } from '../utils/httpError.js';
 import { createSlug } from '../utils/slug.js';
-import { hashPassword, hashToken, verifyPassword } from '../utils/password.js';
+import { generateStrongPassword, hashPassword, hashToken, verifyPassword } from '../utils/password.js';
 import { generateQrDataUrl } from './qr.service.js';
 import { sendMail } from './mail.service.js';
 import { readFileSecret } from './fileSecret.service.js';
@@ -20,6 +20,19 @@ type SignupInput = {
 type LoginInput = {
   email: string;
   password: string;
+};
+
+type TelegramAuthInput = {
+  initData: string;
+  email?: string;
+  companyName?: string;
+};
+
+type TelegramIdentity = {
+  id: string;
+  username?: string;
+  firstName: string;
+  lastName?: string;
 };
 
 type ChangePasswordInput = {
@@ -44,6 +57,71 @@ type VerifyOtpInput = {
 
 async function getJwtSecret() {
   return (await readFileSecret('jwtSecret')) || env.jwtSecret;
+}
+
+/**
+ * Verifies the signed payload supplied by Telegram.WebApp.initData.
+ * The browser payload is untrusted until this check succeeds.
+ */
+export function verifyTelegramWebAppInitData(
+  initData: string,
+  botToken: string,
+  maxAgeSeconds: number,
+): TelegramIdentity {
+  const values = new URLSearchParams(initData);
+  const hashes = values.getAll('hash');
+  if (hashes.length !== 1 || !hashes[0]) {
+    throw new HttpError(401, 'Donnees Telegram incompletes.');
+  }
+
+  const dataCheckString = [...values.entries()]
+    .filter(([key]) => key !== 'hash')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+  const secret = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+  const calculatedHash = crypto.createHmac('sha256', secret).update(dataCheckString).digest('hex');
+
+  const receivedHash = hashes[0];
+  if (receivedHash.length !== calculatedHash.length || !crypto.timingSafeEqual(Buffer.from(receivedHash), Buffer.from(calculatedHash))) {
+    throw new HttpError(401, 'Signature Telegram invalide.');
+  }
+
+  const authDate = Number(values.get('auth_date'));
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(authDate) || authDate > now + 300 || now - authDate > maxAgeSeconds) {
+    throw new HttpError(401, 'Session Telegram expiree. Reouvrez l’application Telegram.');
+  }
+
+  const rawUser = values.get('user');
+  if (!rawUser) throw new HttpError(401, 'Profil Telegram manquant.');
+
+  let user: unknown;
+  try {
+    user = JSON.parse(rawUser);
+  } catch {
+    throw new HttpError(401, 'Profil Telegram invalide.');
+  }
+
+  if (!user || typeof user !== 'object' || !('id' in user) || !('first_name' in user)) {
+    throw new HttpError(401, 'Profil Telegram invalide.');
+  }
+
+  const telegramUser = user as { id: number | string; first_name: unknown; last_name?: unknown; username?: unknown };
+  if (!/^[0-9]+$/.test(String(telegramUser.id)) || typeof telegramUser.first_name !== 'string' || !telegramUser.first_name.trim()) {
+    throw new HttpError(401, 'Profil Telegram invalide.');
+  }
+
+  return {
+    id: String(telegramUser.id),
+    firstName: telegramUser.first_name.trim(),
+    username: typeof telegramUser.username === 'string' ? telegramUser.username : undefined,
+    lastName: typeof telegramUser.last_name === 'string' ? telegramUser.last_name : undefined,
+  };
+}
+
+async function getTelegramBotToken() {
+  return env.telegram.botToken || await readFileSecret('telegramBotToken');
 }
 
 async function sign(user: HydratedDocument<IUser>) {
@@ -124,7 +202,6 @@ export async function signup({ companyName, email, password }: SignupInput) {
     slug,
     feedbackUrl,
     qrCodeDataUrl,
-    freeMessagesLimit: 0,
     freeEmailNotificationsLimit: env.freeEmailNotifications,
     unlimitedAccess: true,
     unlimitedAccessActivatedAt: new Date()
@@ -172,6 +249,75 @@ export async function login({ email, password }: LoginInput) {
   }
 
   return serializeAuth(user);
+}
+
+
+async function telegramAuth({ initData, email, companyName }: TelegramAuthInput) {
+  const botToken = await getTelegramBotToken();
+  if (!botToken) {
+    throw new HttpError(503, 'La connexion Telegram n’est pas configuree.');
+  }
+
+  const telegram = verifyTelegramWebAppInitData(initData, botToken, env.telegram.authMaxAgeSeconds);
+  const existingTelegramUser = await User.findOne({ telegramId: telegram.id }).populate('company');
+  if (existingTelegramUser) {
+    if (existingTelegramUser.isActive === false) throw new HttpError(403, 'Compte desactive.');
+    return { ...(await serializeAuth(existingTelegramUser)), isNewUser: false };
+  }
+
+  if (!email) {
+    throw new HttpError(400, 'Une adresse email est requise pour creer votre entreprise.');
+  }
+
+  const existingEmailUser = await User.findOne({ email });
+  if (existingEmailUser) {
+    // Lier un Telegram a un compte existant reste une action authentifiee
+    // (via /api/webhooks/telegram/connect), afin d’eviter une prise de compte.
+    throw new HttpError(409, 'Cette adresse email est deja associee a un compte. Connectez-vous d’abord puis liez Telegram depuis vos parametres.');
+  }
+
+  const existingCompany = await Company.findOne({ email, user: { $exists: false } });
+  const finalCompanyName = companyName || existingCompany?.name || telegram.username || `${telegram.firstName} entreprise`;
+  const slug = createSlug(finalCompanyName);
+  const feedbackUrl = `${env.frontendUrl}/avis/${slug}`;
+  const qrCodeDataUrl = await generateQrDataUrl(feedbackUrl);
+  const company = existingCompany || await Company.create({
+    name: finalCompanyName,
+    email,
+    slug,
+    feedbackUrl,
+    qrCodeDataUrl,
+    freeEmailNotificationsLimit: env.freeEmailNotifications,
+    unlimitedAccess: true,
+    unlimitedAccessActivatedAt: new Date(),
+  });
+
+  const user = await User.create({
+    company: company._id,
+    email,
+    // A password is deliberately generated only to keep the legacy email/password
+    // flow compatible. It is never returned or used for Telegram authentication.
+    passwordHash: await hashPassword(generateStrongPassword()),
+    telegramId: telegram.id,
+    roleId: 'utilisateur',
+    isActive: true,
+    emailVerified: false,
+    mustChangePassword: false,
+    notificationPreferences: { channels: { email: true, telegram: true } },
+    telegramProfile: {
+      chatId: telegram.id,
+      username: telegram.username,
+      firstName: telegram.firstName,
+      lastName: telegram.lastName,
+      connectedAt: new Date(),
+      isActive: true,
+    },
+  });
+
+  company.user = user._id;
+  await company.save();
+  await user.populate('company');
+  return { ...(await serializeAuth(user)), isNewUser: true };
 }
 
 export async function changePassword({ user, currentPassword, newPassword }: ChangePasswordInput) {

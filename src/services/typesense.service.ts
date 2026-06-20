@@ -57,6 +57,14 @@ function baseUrl() {
   return `${env.typesense.protocol}://${env.typesense.host}:${env.typesense.port}`;
 }
 
+export async function checkTypesenseHealth() {
+  if (!isTypesenseEnabled()) return { ok: true, configured: false };
+  const response = await fetch(`${baseUrl()}/health`, {
+    headers: { 'X-TYPESENSE-API-KEY': env.typesense.apiKey }
+  });
+  return { ok: response.ok, configured: true };
+}
+
 export function isTypesenseEnabled() {
   return Boolean(env.typesense.apiKey);
 }

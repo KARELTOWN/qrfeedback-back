@@ -1,32 +1,22 @@
 import type { Request, Response } from 'express';
-import { env } from '../config/env.js';
 import { HttpError } from '../utils/httpError.js';
-import * as paymentService from '../services/payment.service.js';
-import { readFileSecret } from '../services/fileSecret.service.js';
+
+function paymentDisabled(): never {
+  throw new HttpError(410, 'Les paiements sont desactives: QrFeedback est gratuit.');
+}
 
 export async function createPayment(req: Request, res: Response) {
-  const payment = await paymentService.createPayment(req.body);
-  res.status(201).json(payment);
+  paymentDisabled();
 }
 
 export async function createAuthenticatedPayment(req: Request, res: Response) {
-  const payment = await paymentService.createPaymentForCompany(req.company, req.body.planCode);
-  res.status(201).json(payment);
+  paymentDisabled();
 }
 
 export async function confirmPayment(req: Request, res: Response) {
-  const paymentConfirmSecret = (await readFileSecret('paymentConfirmSecret')) || env.paymentConfirmSecret;
-  if (!paymentConfirmSecret || req.headers['x-payment-secret'] !== paymentConfirmSecret) {
-    throw new HttpError(401, 'Confirmation de paiement non autorisée.');
-  }
-
-  const payment = await paymentService.confirmPayment(String(req.params.id));
-  res.json({ ok: true, payment });
+  paymentDisabled();
 }
 
 export async function verifyPaymentReturn(req: Request, res: Response) {
-  const transactionId =
-    typeof req.body?.transactionId === 'string' ? req.body.transactionId : undefined;
-  const payment = await paymentService.confirmPaymentReference(String(req.params.id), transactionId);
-  res.json({ ok: true, payment });
+  paymentDisabled();
 }

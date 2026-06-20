@@ -1,5 +1,12 @@
 export const plans = [
-  { code: 'unlimited_7500', label: 'Acces illimite QrFeedback', whatsappMessages: 0, emailNotifications: 0, messages: 0, priceFcfa: 7500, unlimited: true }
+  {
+    code: 'free_unlimited',
+    label: 'QrFeedback gratuit',
+    emailNotifications: 0,
+    messages: 0,
+    priceFcfa: 0,
+    unlimited: true
+  }
 ];
 
 export function findPlan(code: string) {

@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import type Mail from 'nodemailer/lib/mailer/index.js';
 import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 
 function createTransport() {
   if (!env.smtp.host || !env.smtp.user || !env.smtp.pass) return null;
@@ -23,10 +24,16 @@ type SendMailInput = {
   attachments?: Mail.Attachment[];
 };
 
+function maskEmail(email: string) {
+  const [localPart, domain] = email.split('@');
+  if (!domain) return '***';
+  return `${localPart.slice(0, 2)}***@${domain}`;
+}
+
 export async function sendMail({ to, subject, html, attachments = [] }: SendMailInput) {
   const transport = createTransport();
   if (!transport) {
-    console.log('[mail:mock]', { to, subject });
+    logger.info('mail:mock', { to: maskEmail(to), subject });
     return;
   }
 
@@ -37,4 +44,12 @@ export async function sendMail({ to, subject, html, attachments = [] }: SendMail
     html,
     attachments
   });
+  logger.info('mail:sent', { to: maskEmail(to), subject, attachmentCount: attachments.length });
+}
+
+export async function checkMailHealth() {
+  const transport = createTransport();
+  if (!transport) return { ok: true, configured: false };
+  await transport.verify();
+  return { ok: true, configured: true };
 }

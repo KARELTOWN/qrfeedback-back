@@ -56,11 +56,6 @@ export function buildQrPdfBuffer({ companyName, feedbackUrl, qrCodeDataUrl }: Bu
       .fontSize(10)
       .text(feedbackUrl, 104, 575, { align: 'center', link: feedbackUrl, width: 386 });
 
-    doc
-      .fillColor('#52677a')
-      .fontSize(11)
-      .text('Imprimez ce document et placez-le à l’accueil, sur les tables ou près de la caisse.', 98, 660, { align: 'center', width: 400 });
-
     doc.end();
   });
 }

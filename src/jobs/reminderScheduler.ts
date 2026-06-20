@@ -1,5 +1,5 @@
 export function startReminderScheduler() {
-  console.info("[reminder:scheduler:disabled] WhatsApp reminders are disabled.");
+  console.info("[reminder:scheduler:disabled] Payment reminders are disabled for the free plan.");
 }
 
 export async function processDueReminders(now = new Date()) {

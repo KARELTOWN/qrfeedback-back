@@ -2,10 +2,8 @@ import mongoose, { type InferSchemaType, type Types } from "mongoose";
 
 export const secretNames = [
   "jwtSecret",
-  "whatsappAccessToken",
-  "whatsappWebhookVerifyToken",
-  "paymentConfirmSecret",
   "telegramBotToken",
+  "openaiApiKey",
 ] as const;
 
 export type SecretName = (typeof secretNames)[number];

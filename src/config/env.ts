@@ -2,16 +2,35 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+function splitCsv(value: string | undefined) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const nodeEnv = process.env.NODE_ENV || "development";
+const jwtSecret = process.env.JWT_SECRET || "dev-only-secret";
+
+if (nodeEnv === "production" && jwtSecret === "dev-only-secret") {
+  throw new Error("JWT_SECRET must be configured in production.");
+}
+
 export const env = {
-  nodeEnv: process.env.NODE_ENV || "development",
+  nodeEnv,
   port: Number(process.env.PORT || 4000),
   backendUrl: process.env.BACKEND_URL || "",
   mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/qr_feedback",
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
-  jwtSecret: process.env.JWT_SECRET || "dev-only-secret",
-  freeWhatsappMessages: Number(process.env.FREE_WHATSAPP_MESSAGES || 50),
+  corsOrigins: splitCsv(process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "http://localhost:5173"),
+  jwtSecret,
   freeEmailNotifications: Number(process.env.FREE_EMAIL_NOTIFICATIONS || 300),
   otpRequestLimit: Number(process.env.OTP_REQUEST_LIMIT || 3),
+  redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
+  rateLimitTimeZone: process.env.RATE_LIMIT_TIME_ZONE || 'Africa/Lagos',
+  weeklyRecommendationLimit: Number(process.env.WEEKLY_RECOMMENDATION_LIMIT || 7),
+  openaiRecommendationsModel: process.env.OPENAI_RECOMMENDATIONS_MODEL || 'gpt-4.1-mini',
+  openaiRecommendationsLanguage: process.env.OPENAI_RECOMMENDATIONS_LANGUAGE || 'français',
   smtp: {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
@@ -19,22 +38,6 @@ export const env = {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
     from: process.env.MAIL_FROM || "QR Feedback <no-reply@example.com>",
-  },
-  whatsapp: {
-    businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID,
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
-    graphApiVersion: process.env.WHATSAPP_GRAPH_API_VERSION || "v25.0",
-    reviewTemplateName:
-      process.env.WHATSAPP_REVIEW_TEMPLATE_NAME || "nouvel_avis_client",
-    reviewTemplateLanguage:
-      process.env.WHATSAPP_REVIEW_TEMPLATE_LANGUAGE || "fr",
-  },
-  kkiapay: {
-    apiUrl: process.env.KKIAPAY_API_URL || "https://api.kkiapay.me",
-    publicKey: process.env.KKIAPAY_PUBLIC_KEY || "",
-    privateKey: process.env.KKIAPAY_PRIVATE_KEY || "",
-    secretKey: process.env.KKIAPAY_SECRET_KEY || "",
-    sandbox: process.env.KKIAPAY_SANDBOX === "true",
   },
   turnstile: {
     secretKey: process.env.TURNSTILE_SECRET_KEY || "",
@@ -55,8 +58,8 @@ export const env = {
     botUsername: process.env.TELEGRAM_BOT_USERNAME || "QrFeedback_Bot",
     webhookUrl: process.env.TELEGRAM_WEBHOOK_URL || "",
     webAppUrl: process.env.TELEGRAM_WEBAPP_URL || "",
+    authMaxAgeSeconds: Number(process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 3600),
   },
-  paymentConfirmSecret: process.env.PAYMENT_CONFIRM_SECRET || "",
   encryption: {
     masterKey: process.env.ENCRYPTION_MASTER_KEY || "",
   },

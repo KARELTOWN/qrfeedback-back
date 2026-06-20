@@ -6,6 +6,9 @@ type SendTelegramInput = {
   message: string;
   parseMode?: "HTML" | "Markdown" | "MarkdownV2";
   disableWebPagePreview?: boolean;
+  keyboard?: Array<
+    Array<{ text: string; callback_data?: string; url?: string; web_app?: { url: string } }>
+  >;
 };
 
 type TelegramResponse = {
@@ -20,6 +23,14 @@ type TelegramResponse = {
   description?: string;
 };
 
+type SendTelegramMediaInput = {
+  chatId: string;
+  type: "image" | "video" | "audio";
+  url: string;
+  caption?: string;
+  parseMode?: "HTML" | "Markdown" | "MarkdownV2";
+};
+
 async function getBotToken() {
   const token = env.telegram.botToken;
   if (token) return token;
@@ -31,6 +42,7 @@ export async function sendTelegram({
   message,
   parseMode = "HTML",
   disableWebPagePreview = true,
+  keyboard,
 }: SendTelegramInput) {
   const botToken = await getBotToken();
 
@@ -48,6 +60,19 @@ export async function sendTelegram({
 
   console.info("[telegram:send:start]", logContext);
 
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    text: message,
+    parse_mode: parseMode,
+    disable_web_page_preview: disableWebPagePreview,
+  };
+
+  if (keyboard) {
+    payload.reply_markup = {
+      inline_keyboard: keyboard,
+    };
+  }
+
   const response = await fetch(
     `https://api.telegram.org/bot${botToken}/sendMessage`,
     {
@@ -55,12 +80,7 @@ export async function sendTelegram({
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: parseMode,
-        disable_web_page_preview: disableWebPagePreview,
-      }),
+      body: JSON.stringify(payload),
     },
   );
 
@@ -90,7 +110,7 @@ export async function sendTelegramKeyboard(
   chatId: string,
   message: string,
   keyboard: Array<
-    Array<{ text: string; callback_data?: string; url?: string }>
+    Array<{ text: string; callback_data?: string; url?: string; web_app?: { url: string } }>
   >,
   parseMode: "HTML" | "Markdown" = "HTML",
 ) {
@@ -126,6 +146,67 @@ export async function sendTelegramKeyboard(
 
   return {
     messageId: data.result?.message_id,
+    ok: true,
+  };
+}
+
+export async function sendTelegramMedia({
+  chatId,
+  type,
+  url,
+  caption,
+  parseMode = "HTML",
+}: SendTelegramMediaInput) {
+  const botToken = await getBotToken();
+
+  const methodByType = {
+    image: "sendPhoto",
+    video: "sendVideo",
+    audio: "sendAudio",
+  } as const;
+  const fieldByType = {
+    image: "photo",
+    video: "video",
+    audio: "audio",
+  } as const;
+
+  if (!botToken) {
+    console.warn("[telegram:send-media:mock]", {
+      chatId: chatId.slice(-4),
+      type,
+      hasUrl: Boolean(url),
+    });
+    return { messageId: "mock", ok: true };
+  }
+
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    [fieldByType[type]]: url,
+    parse_mode: parseMode,
+  };
+
+  if (caption) {
+    payload.caption = caption.slice(0, 1024);
+  }
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${botToken}/${methodByType[type]}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+
+  const data = (await response.json()) as TelegramResponse;
+  if (!data.ok) {
+    throw new Error(`Telegram error: ${data.description}`);
+  }
+
+  return {
+    messageId: data.result?.message_id || "unknown",
     ok: true,
   };
 }

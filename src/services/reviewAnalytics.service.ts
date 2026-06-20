@@ -1,6 +1,11 @@
 import type { HydratedDocument } from 'mongoose';
 import type { ICompany } from '../models/Company.js';
 import { Review, type IReview } from '../models/Review.js';
+import { QrScan } from '../models/QrScan.js';
+import { env } from '../config/env.js';
+import aiConfig from '../config/recommendations-ai.json' with { type: 'json' };
+import { readFileSecret } from './fileSecret.service.js';
+import { HttpError } from '../utils/httpError.js';
 import { buildPagination, normalizePagination, type PaginationInput } from '../utils/pagination.js';
 import { buildReviewText, inferSentiment, reindexCompanyReviews, searchReviewsSemantically } from './typesense.service.js';
 
@@ -15,6 +20,8 @@ type DateRangeInput = {
   qrCodeId?: string;
   startDate?: string;
   endDate?: string;
+  comparisonStartDate?: string;
+  comparisonEndDate?: string;
 };
 
 type TopicRule = {
@@ -38,7 +45,7 @@ function reviewDate(review: IReview & { createdAt?: Date }) {
   return review.createdAt instanceof Date ? review.createdAt : new Date();
 }
 
-function buildDateMatch(input: DateRangeInput = {}) {
+function buildDateMatch(input: DateRangeInput = {}, dateField = 'createdAt') {
   const match: Record<string, unknown> = {};
   if (input.qrCodeId) match.qrCode = input.qrCodeId;
   const createdAt: Record<string, Date> = {};
@@ -48,11 +55,11 @@ function buildDateMatch(input: DateRangeInput = {}) {
     end.setHours(23, 59, 59, 999);
     createdAt.$lte = end;
   }
-  if (Object.keys(createdAt).length) match.createdAt = createdAt;
+  if (Object.keys(createdAt).length) match[dateField] = createdAt;
   return match;
 }
 
-function previousDateMatch(input: DateRangeInput = {}) {
+function previousDateMatch(input: DateRangeInput = {}, dateField = 'createdAt') {
   const match: Record<string, unknown> = {};
   if (input.qrCodeId) match.qrCode = input.qrCodeId;
   if (!input.startDate || !input.endDate) return match;
@@ -62,7 +69,7 @@ function previousDateMatch(input: DateRangeInput = {}) {
   const duration = end.getTime() - start.getTime();
   const previousEnd = new Date(start.getTime() - 1);
   const previousStart = new Date(previousEnd.getTime() - duration);
-  match.createdAt = { $gte: previousStart, $lte: previousEnd };
+  match[dateField] = { $gte: previousStart, $lte: previousEnd };
   return match;
 }
 
@@ -74,7 +81,6 @@ function toPlainReview(review: HydratedDocument<IReview>) {
     serviceFeedback: review.serviceFeedback,
     customAnswers: review.customAnswers,
     notificationStatus: review.notificationStatus,
-    notificationWhatsappNumber: review.notificationWhatsappNumber,
     qrCode: review.qrCode
   };
 }
@@ -199,12 +205,12 @@ function rangeTrendSummary(reviews: HydratedDocument<IReview>[], previous: Hydra
   if (!reviews.length) {
     lines.push('Aucun avis disponible pour la période sélectionnée.');
   } else {
-    lines.push(`${reviews.length} avis analysé${reviews.length > 1 ? 's' : ''} pour cette période, avec une note moyenne de ${currentAverage.toFixed(2)}/5.`);
+    lines.push(`${reviews.length} avis analysé${reviews.length > 1 ? 's' : ''} sur la période, pour une note moyenne de ${currentAverage.toFixed(2)}/5.`);
   }
 
   if (previous.length) {
     const direction = delta > 0 ? 'en hausse' : delta < 0 ? 'en baisse' : 'stable';
-    lines.push(`La note moyenne est ${direction} de ${Math.abs(delta).toFixed(2)} point par rapport a la meme duree juste avant les dates selectionnees.`);
+    lines.push(`Par rapport à la période précédente équivalente, la note est ${direction} de ${Math.abs(delta).toFixed(2)} point.`);
   }
 
   if (topProblem) {
@@ -224,10 +230,10 @@ function rangeTrendSummary(reviews: HydratedDocument<IReview>[], previous: Hydra
 export async function getAiOverview(company: HydratedDocument<ICompany>, input: DateRangeInput = {}) {
   const [reviews, previousReviews] = await Promise.all([
     Review.find({ company: company._id, ...buildDateMatch(input) })
-      .populate('qrCode', 'label whatsappNumber slug')
+      .populate('qrCode', 'label slug')
       .sort({ createdAt: -1 }),
     Review.find({ company: company._id, ...previousDateMatch(input) })
-      .populate('qrCode', 'label whatsappNumber slug')
+      .populate('qrCode', 'label slug')
       .sort({ createdAt: -1 })
   ]);
 
@@ -238,6 +244,102 @@ export async function getAiOverview(company: HydratedDocument<ICompany>, input: 
     trends: rangeTrendSummary(reviews, previousReviews),
     problems: problemClusters(reviews)
   };
+}
+
+function conversionRate(reviewCount: number, scanCount: number) {
+  return scanCount ? Number(((Math.min(reviewCount, scanCount) / scanCount) * 100).toFixed(2)) : 0;
+}
+
+function urgentReviews(reviews: HydratedDocument<IReview>[]) {
+  const urgentPattern = /\b(urgent|urgence|urgentissime|asap|immediat|immédiat|prioritaire)\b/i;
+  return reviews
+    .filter((review) => urgentPattern.test(buildReviewText(review)))
+    .map((review) => ({
+      id: String(review._id),
+      rating: review.rating,
+      createdAt: reviewDate(review).toISOString(),
+      text: buildSnippet(review)
+    }));
+}
+
+/** Full, quota-free analysis used by POST /api/analyse. */
+export async function analyseReviews(company: HydratedDocument<ICompany>, input: DateRangeInput = {}) {
+  const currentMatch = { company: company._id, moderationStatus: { $ne: 'archived' }, ...buildDateMatch(input) };
+  const comparisonInput = input.comparisonStartDate && input.comparisonEndDate ? { ...input, startDate: input.comparisonStartDate, endDate: input.comparisonEndDate } : input;
+  const previousMatch = { company: company._id, moderationStatus: { $ne: 'archived' }, ...(input.comparisonStartDate ? buildDateMatch(comparisonInput) : previousDateMatch(input)) };
+  const [reviews, previousReviews, scanCount, previousScanCount] = await Promise.all([
+    Review.find(currentMatch).populate('qrCode', 'label slug').sort({ createdAt: -1 }),
+    Review.find(previousMatch).populate('qrCode', 'label slug').sort({ createdAt: -1 }),
+    QrScan.countDocuments({ company: company._id, ...buildDateMatch(input, 'scannedAt') }),
+    QrScan.countDocuments({ company: company._id, ...(input.comparisonStartDate ? buildDateMatch(comparisonInput, 'scannedAt') : previousDateMatch(input, 'scannedAt')) })
+  ]);
+  const trends = rangeTrendSummary(reviews, previousReviews);
+  const topics = problemClusters(reviews);
+  const sentiment = sentimentSummary(reviews);
+  return {
+    generatedAt: new Date().toISOString(),
+    period: { startDate: input.startDate || null, endDate: input.endDate || null, qrCodeId: input.qrCodeId || null },
+    comparisonPeriod: { startDate: input.comparisonStartDate || null, endDate: input.comparisonEndDate || null },
+    reviews: { count: reviews.length, averageRating: trends.recentAverage, urgent: urgentReviews(reviews) },
+    comparison: {
+      previousReviewCount: previousReviews.length,
+      reviewCountDelta: reviews.length - previousReviews.length,
+      previousAverageRating: trends.previousAverage,
+      averageRatingDelta: trends.averageDelta,
+      previousScanCount,
+      scanCountDelta: scanCount - previousScanCount
+    },
+    scans: { count: scanCount, conversionRate: conversionRate(reviews.length, scanCount) },
+    topics,
+    summary: trends.text,
+    // Alias de compatibilite : l'ecran IA existant peut basculer sur cette
+    // route sans perdre son contrat actuel.
+    totalReviews: reviews.length,
+    sentiment,
+    trends,
+    problems: topics
+  };
+}
+
+type RecommendationPayload = {
+  scans?: { conversionRate?: number; count?: number };
+  comparison?: { averageRatingDelta?: number; reviewCountDelta?: number };
+  reviews?: { urgent?: unknown[]; count?: number; averageRating?: number };
+  topics?: Array<{ key?: string; label?: string; count?: number; negativeCount?: number; impact?: string }>;
+};
+
+/** Rule-based recommendations, intentionally separate from the free analysis route. */
+export async function buildRecommendations(payload: RecommendationPayload) {
+  const urgentCount = Array.isArray(payload.reviews?.urgent) ? payload.reviews!.urgent.length : 0;
+  const ratingDelta = Number(payload.comparison?.averageRatingDelta || 0);
+  const scanRate = Number(payload.scans?.conversionRate || 0);
+  const topics = Array.isArray(payload.topics) ? payload.topics : [];
+
+  const apiKey = (await readFileSecret('openaiApiKey')) || process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new HttpError(503, 'La clé OpenAI n’est pas configurée.');
+  const context = { responseLanguage: env.openaiRecommendationsLanguage, metrics: { totalReviews: payload.reviews?.count || 0, averageRating: payload.reviews?.averageRating || 0, ratingDelta, satisfiedPercent: undefined, dissatisfiedPercent: undefined, scanRate }, urgentReviews: (payload.reviews?.urgent || []).slice(0, 5), recurringTopics: topics.slice(0, 3).map(({ label, count, negativeCount, impact }) => ({ label, count, negativeCount, impact })) };
+  const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: env.openaiRecommendationsModel, input: [{ role: 'system', content: aiConfig.systemPrompt }, { role: 'user', content: JSON.stringify(context) }], text: { format: { type: 'json_schema', name: 'recommendations', strict: true, schema: aiConfig.responseSchema } } }) });
+  if (!response.ok) throw new HttpError(502, 'La génération des recommandations IA a échoué.');
+  const result = await response.json() as {
+    output_text?: string;
+    output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+  };
+  const outputText = result.output_text || result.output
+    ?.flatMap((item) => item.content || [])
+    .find((content) => content.type === 'output_text' && typeof content.text === 'string')
+    ?.text;
+  if (!outputText) {
+    console.error('[recommendations:openai:invalid-response]', { hasOutput: Boolean(result.output?.length) });
+    throw new HttpError(502, 'Réponse IA invalide.');
+  }
+  let parsed: { recommendations?: unknown };
+  try {
+    parsed = JSON.parse(outputText) as { recommendations?: unknown };
+  } catch {
+    throw new HttpError(502, 'Réponse IA invalide.');
+  }
+  if (!Array.isArray(parsed.recommendations)) throw new HttpError(502, 'Réponse IA invalide.');
+  return parsed.recommendations;
 }
 
 export async function searchAiReviews(company: HydratedDocument<ICompany>, input: SearchInput = {}) {
@@ -263,7 +365,7 @@ export async function searchAiReviews(company: HydratedDocument<ICompany>, input
   if (semanticResult) {
     const ids = semanticResult.documents.map((document) => document.id);
     const reviews = await Review.find({ _id: { $in: ids }, company: company._id, ...buildDateMatch(input) })
-      .populate('qrCode', 'label whatsappNumber slug');
+      .populate('qrCode', 'label slug');
     const byId = new Map(reviews.map((review) => [String(review._id), review]));
 
     return {
@@ -274,7 +376,7 @@ export async function searchAiReviews(company: HydratedDocument<ICompany>, input
   }
 
   const allReviews = await Review.find({ company: company._id, ...buildDateMatch(input) })
-    .populate('qrCode', 'label whatsappNumber slug')
+    .populate('qrCode', 'label slug')
     .sort({ createdAt: -1 });
   const matches = allReviews
     .map((review) => ({ review, score: lexicalScore(query, review) }))

@@ -29,6 +29,25 @@ export const loginValidator = [
   body('password').isLength({ min: 8 }).withMessage('Mot de passe requis.')
 ];
 
+export const telegramAuthValidator = [
+  body('initData')
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage('Donnees d’authentification Telegram requises.'),
+  body('email')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isEmail()
+    .withMessage('Adresse email invalide.')
+    .normalizeEmail(),
+  body('companyName')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isLength({ min: 2, max: 120 })
+    .withMessage("Le nom de l'entreprise doit contenir entre 2 et 120 caracteres.")
+];
+
 export const changePasswordValidator = [
   body('currentPassword').isLength({ min: 8 }).withMessage('Mot de passe actuel requis.'),
   body('newPassword')

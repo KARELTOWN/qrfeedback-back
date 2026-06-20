@@ -12,6 +12,10 @@ export async function getReviews(req: Request, res: Response) {
     rating: req.query.rating ? Number(req.query.rating) : undefined,
     sentiment: req.query.sentiment ? String(req.query.sentiment) as 'positive' | 'neutral' | 'negative' : undefined,
     notificationStatus: req.query.notificationStatus ? String(req.query.notificationStatus) : undefined,
+    qrCodeId: req.query.qrCodeId ? String(req.query.qrCodeId) : undefined,
+    channel: req.query.channel ? String(req.query.channel) as 'email' | 'telegram' : undefined,
+    moderationStatus: req.query.moderationStatus ? String(req.query.moderationStatus) as 'published' | 'archived' : undefined,
+    includeArchived: req.query.includeArchived === 'true',
     startDate: req.query.startDate ? String(req.query.startDate) : undefined,
     endDate: req.query.endDate ? String(req.query.endDate) : undefined
   });
@@ -19,8 +23,18 @@ export async function getReviews(req: Request, res: Response) {
 }
 
 export async function getStats(req: Request, res: Response) {
-  const stats = await dashboardService.getCompanyStats(req.company);
+  const stats = await dashboardService.getCompanyStats(req.company, {
+    qrCodeId: req.query.qrCodeId ? String(req.query.qrCodeId) : undefined,
+    startDate: req.query.startDate ? String(req.query.startDate) : undefined,
+    endDate: req.query.endDate ? String(req.query.endDate) : undefined
+  });
   res.json(stats);
+}
+
+export async function getQrTrends(req: Request, res: Response) {
+  const requestedWeeks = Number(req.query.weeks || 4);
+  const weeks = ([4, 6, 8].includes(requestedWeeks) ? requestedWeeks : 4) as 4 | 6 | 8;
+  res.json({ weeks, items: await dashboardService.getQrTrends(req.company, { weeks }) });
 }
 
 export async function exportExcel(req: Request, res: Response) {
@@ -85,4 +99,8 @@ export async function searchAiReviews(req: Request, res: Response) {
 
 export async function reindexAiReviews(req: Request, res: Response) {
   res.json(await reviewAnalyticsService.rebuildAiIndex(req.company));
+}
+
+export async function updateReviewModeration(req: Request, res: Response) {
+  res.json(await dashboardService.updateReviewModeration(req.company, String(req.params.reviewId), req.body));
 }

@@ -12,6 +12,7 @@ import { CompanyQrCode } from "../models/CompanyQrCode.js";
 import { TelegramLinkToken } from "../models/TelegramLinkToken.js";
 import { Review } from "../models/Review.js";
 import { generateQrDataUrl } from "./qr.service.js";
+import { buildQrPdfBuffer } from "./pdf.service.js";
 import { createSlug } from "../utils/slug.js";
 import {
   sendTelegramKeyboard,
@@ -19,6 +20,7 @@ import {
   answerCallbackQuery,
 } from "./telegram.service.js";
 import { getCompanyStats } from "./dashboard.service.js";
+import { buildCompanyReviewsExcel } from './dashboard.service.js';
 import { getAiOverview } from "./reviewAnalytics.service.js";
 import { searchReviewsSemantically } from "./typesense.service.js";
 import type { Types } from "mongoose";
@@ -26,17 +28,50 @@ import type { Types } from "mongoose";
 let bot: TelegramBotConstructor | null = null;
 
 type UserContextState =
-  | "creating_qr"
+  | "creating_qr_name"
   | "search_reviews"
   | "guest_create_email"
-  | "guest_create_label";
+  | "guest_create_label"
+  | "review_add_tag"
+  | "review_reply"
+  | "review_search_tag";
 
-// Track user conversation context. Telegram callbacks and messages can be
-// matched either by chat id or by Telegram user id.
-const userContexts = new Map<
-  string,
-  { state: UserContextState; email?: string; qrName?: string }
->();
+type UserContext = {
+  state: UserContextState;
+  email?: string;
+  qrName?: string;
+  emailEnabled?: boolean;
+  telegramEnabled?: boolean;
+  reviewId?: string;
+};
+
+type TelegramInlineButton = {
+  text: string;
+  callback_data?: string;
+  url?: string;
+};
+
+type ReviewFilter = {
+  rating?: 1 | 2 | 3 | 4 | 5;
+  sentiment?: "positive" | "neutral" | "negative";
+  moderationStatus?: "published" | "archived";
+  qrCodeId?: string;
+  qrCodeLabel?: string;
+  tag?: string;
+  page?: number;
+};
+
+const REVIEWS_PER_TELEGRAM_PAGE = 10;
+const QR_CODES_PER_TELEGRAM_PAGE = 10;
+
+const userContexts = new Map<string, UserContext>();
+const reviewTagTokens = new Map<string, string>();
+const reviewFilterTokens = new Map<string, ReviewFilter>();
+const qrActionTokens = new Map<string, { qrCodeId: string; qrCodeLabel: string }>();
+
+function formatPercent(value: unknown) {
+  return `${Number(value || 0).toFixed(Number(value || 0) % 1 === 0 ? 0 : 2)}%`;
+}
 
 function getContextKeys(chatId: number, telegramUserId?: number) {
   return [
@@ -49,7 +84,7 @@ function setUserContext(
   chatId: number,
   telegramUserId: number | undefined,
   state: UserContextState,
-  payload: { email?: string; qrName?: string } = {},
+  payload: Omit<UserContext, "state"> = {},
 ) {
   for (const key of getContextKeys(chatId, telegramUserId)) {
     userContexts.set(key, { state, ...payload });
@@ -70,24 +105,6 @@ function clearUserContext(chatId: number, telegramUserId?: number) {
     userContexts.delete(key);
   }
 }
-
-const COMMANDS = {
-  START: "/start",
-  HELP: "/help",
-  SETTINGS: "/settings",
-  CREATE_QR: "/create_qr",
-  MY_QR_CODES: "/my_qr_codes",
-  REVIEWS: "/reviews",
-  SEARCH: "/search",
-  STATS: "/stats",
-  AI: "/ai",
-};
-
-type TelegramInlineButton = {
-  text: string;
-  callback_data?: string;
-  url?: string;
-};
 
 function isTelegramAllowedUrl(url: string) {
   try {
@@ -114,6 +131,132 @@ function frontendButton(text: string, path = ""): TelegramInlineButton {
   return { text, callback_data: "frontend_url_unavailable" };
 }
 
+
+function mainMenuKeyboard(): TelegramInlineButton[][] {
+  return [
+    [{ text: "Mes avis", callback_data: "my_reviews" }],
+    [{ text: "Mes QR codes", callback_data: "my_qr_codes" }],
+    [{ text: "Creer un QR", callback_data: "create_qr" }],
+    [{ text: "Statistiques", callback_data: "dashboard_stats" }],
+    [{ text: "Analyse IA", callback_data: "ai_overview" }],
+    [{ text: "Parametres", callback_data: "settings" }],
+    [{ text: "Aide", callback_data: "help" }],
+    [frontendButton("Ouvrir le dashboard", "/dashboard")],
+  ];
+}
+
+function navigationKeyboard(
+  backCallback?: string,
+  extra: TelegramInlineButton[][] = [],
+): TelegramInlineButton[][] {
+  const rows = [...extra];
+  rows.push([{ text: "Retour", callback_data: backCallback || "main_menu" }]);
+  rows.push([{ text: "Menu principal", callback_data: "main_menu" }]);
+  return rows;
+}
+
+function reviewActionKeyboard(reviewId: string): TelegramInlineButton[][] {
+  return [
+    [
+      { text: "Voir details", callback_data: `review_detail_${reviewId}` },
+      { text: "Archiver", callback_data: `review_archive_${reviewId}` },
+    ],
+    [
+      { text: "Ajouter une note", callback_data: `review_reply_${reviewId}` },
+      { text: "Ajouter un tag", callback_data: `review_tag_${reviewId}` },
+    ],
+    [frontendButton("Ouvrir le dashboard", "/dashboard/reviews")],
+    [{ text: "Retour", callback_data: "my_reviews" }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
+}
+
+function reviewListKeyboard(filter: ReviewFilter = {}, hasNextPage = false): TelegramInlineButton[][] {
+  const token = createReviewFilterToken(filter);
+  const page = Math.max(1, Number(filter.page || 1));
+  const previousFilter = { ...filter, page: Math.max(1, page - 1) };
+  const nextFilter = { ...filter, page: page + 1 };
+  const paginationRows: TelegramInlineButton[][] = [];
+
+  if (page > 1 || hasNextPage) {
+    const row: TelegramInlineButton[] = [];
+    if (page > 1) row.push({ text: "Precedent", callback_data: `reviews_page_${createReviewFilterToken(previousFilter)}` });
+    if (hasNextPage) row.push({ text: "Suivant", callback_data: `reviews_page_${createReviewFilterToken(nextFilter)}` });
+    paginationRows.push(row);
+  }
+
+  return [
+    ...paginationRows,
+    [{ text: "Filtrer", callback_data: `reviews_filters_${token}` }],
+    [{ text: "Recherche", callback_data: `search_reviews_${token}` }],
+    [{ text: "Tous les avis", callback_data: "my_reviews" }],
+    [{ text: "Retour", callback_data: "main_menu" }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
+}
+
+function reviewFiltersKeyboard(filter: ReviewFilter = {}): TelegramInlineButton[][] {
+  const token = createReviewFilterToken(filter);
+  const rows: TelegramInlineButton[][] = [
+    [{ text: "Exporter Excel", callback_data: `reviews_export_${token}` }],
+    [{ text: "Par tag", callback_data: `reviews_by_tag_${token}` }],
+    [{ text: "Par statut", callback_data: `reviews_status_${token}` }],
+    [{ text: "Par score", callback_data: `reviews_rating_${token}` }],
+    [{ text: "Par sentiment", callback_data: `reviews_sentiment_${token}` }],
+    [{ text: "Recherche", callback_data: `search_reviews_${token}` }],
+    [{ text: "Retour", callback_data: "my_reviews" }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
+
+  if (!filter.qrCodeId) {
+    rows.unshift([{ text: "Par QR code", callback_data: `reviews_by_qr_${token}` }]);
+  }
+
+  return rows;
+}
+
+function reviewRatingKeyboard(filter: ReviewFilter = {}): TelegramInlineButton[][] {
+  const token = createReviewFilterToken(filter);
+  return [
+    [
+      { text: "1", callback_data: `reviews_rating_1_${token}` },
+      { text: "2", callback_data: `reviews_rating_2_${token}` },
+      { text: "3", callback_data: `reviews_rating_3_${token}` },
+    ],
+    [
+      { text: "4", callback_data: `reviews_rating_4_${token}` },
+      { text: "5", callback_data: `reviews_rating_5_${token}` },
+    ],
+    [{ text: "Retour", callback_data: `reviews_filters_${token}` }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
+}
+
+function reviewSentimentKeyboard(filter: ReviewFilter = {}): TelegramInlineButton[][] {
+  const token = createReviewFilterToken(filter);
+  return [
+    [
+      { text: "Content", callback_data: `reviews_sentiment_positive_${token}` },
+      { text: "Neutre", callback_data: `reviews_sentiment_neutral_${token}` },
+      { text: "Mecontent", callback_data: `reviews_sentiment_negative_${token}` },
+    ],
+    [{ text: "Retour", callback_data: `reviews_filters_${token}` }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
+}
+
+function reviewStatusKeyboard(filter: ReviewFilter = {}): TelegramInlineButton[][] {
+  const token = createReviewFilterToken(filter);
+  return [
+    [
+      { text: "Publies", callback_data: `reviews_status_published_${token}` },
+      { text: "Archives", callback_data: `reviews_status_archived_${token}` },
+    ],
+    [{ text: "Retour", callback_data: `reviews_filters_${token}` }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
+}
+
 function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -130,6 +273,10 @@ function getReviewQrLabel(review: any) {
   return review.qrCode?.label || review.qrCode?.slug || "QR non precise";
 }
 
+function formatModerationStatus(value: unknown) {
+  return String(value) === "archived" ? "Archive" : "Publie";
+}
+
 function formatReviewExtraAnswers(review: any, limit = 2) {
   return (review.customAnswers || [])
     .filter((answer: any) => answer?.value !== undefined && answer?.value !== "")
@@ -138,17 +285,100 @@ function formatReviewExtraAnswers(review: any, limit = 2) {
     .join("\n");
 }
 
-function formatReviewSummary(review: any, index: number) {
-  const comment = review.serviceFeedback || "Sans commentaire";
-  const answers = formatReviewExtraAnswers(review);
+function formatShortReviewSummary(review: any, index: number) {
+  const sentiment =
+    review.rating >= 4 ? "Client content" : review.rating <= 2 ? "Client mecontent" : "Avis moyen";
+  const comment = String(review.serviceFeedback || "Sans commentaire").replace(/\s+/g, " ").trim();
+  const snippet = comment.length > 70 ? `${comment.slice(0, 67)}...` : comment;
+
   return [
-    `${index + 1}. <b>${review.rating}/5</b> - ${formatReviewDate(review.createdAt)}`,
-    `QR: <b>${escapeHtml(getReviewQrLabel(review))}</b>`,
-    `Experience: ${escapeHtml(comment).slice(0, 120)}`,
-    answers,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    `<b>${index + 1}. ${sentiment}</b> - ${review.rating}/5`,
+    `QR: ${escapeHtml(getReviewQrLabel(review))}`,
+    `"${escapeHtml(snippet)}"`,
+    formatReviewDate(review.createdAt),
+  ].join("\n");
+}
+
+function buildReviewListTitle(filter: ReviewFilter) {
+  const parts = ["Mes avis"];
+  if (filter.qrCodeId) parts.push(`QR ${escapeHtml(filter.qrCodeLabel || "choisi")}`);
+  if (filter.tag) parts.push(`tag "${escapeHtml(filter.tag)}"`);
+  if (filter.rating) parts.push(`score ${filter.rating}/5`);
+  if (filter.sentiment === "positive") parts.push("clients contents");
+  if (filter.sentiment === "neutral") parts.push("avis neutres");
+  if (filter.sentiment === "negative") parts.push("clients mecontents");
+  if (filter.moderationStatus) parts.push(formatModerationStatus(filter.moderationStatus));
+  return parts.join(" - ");
+}
+
+function createReviewTagToken(companyId: unknown, tag: string) {
+  const token = crypto
+    .createHash("sha1")
+    .update(`${String(companyId)}:${tag}`)
+    .digest("hex")
+    .slice(0, 20);
+  reviewTagTokens.set(token, tag);
+  return token;
+}
+
+function createReviewFilterToken(filter: ReviewFilter = {}) {
+  const token = crypto
+    .createHash("sha1")
+    .update(`${Date.now()}:${Math.random()}:${JSON.stringify(filter)}`)
+    .digest("hex")
+    .slice(0, 20);
+  reviewFilterTokens.set(token, filter);
+  return token;
+}
+
+function createQrActionToken(qrCodeId: unknown, qrCodeLabel: unknown) {
+  const token = crypto
+    .createHash("sha1")
+    .update(`${Date.now()}:${Math.random()}:${String(qrCodeId)}:${String(qrCodeLabel || "")}`)
+    .digest("hex")
+    .slice(0, 20);
+  qrActionTokens.set(token, {
+    qrCodeId: String(qrCodeId),
+    qrCodeLabel: String(qrCodeLabel || "QR Code"),
+  });
+  return token;
+}
+
+function getQrActionToken(tokenOrId: string) {
+  return qrActionTokens.get(tokenOrId) || { qrCodeId: tokenOrId, qrCodeLabel: "" };
+}
+
+function getReviewFilterToken(token: string) {
+  return reviewFilterTokens.get(token) || {};
+}
+
+function resetReviewFilterPage(filter: ReviewFilter): ReviewFilter {
+  const { page, ...rest } = filter;
+  return rest;
+}
+
+function buildReviewFiltersText(filter: ReviewFilter) {
+  const qrLine = filter.qrCodeId
+    ? `\nQR actif: <b>${escapeHtml(filter.qrCodeLabel || "QR choisi")}</b>\n`
+    : "";
+
+  return `<b>Filtrer les avis</b>${qrLine}\nChoisissez une option simple.`;
+}
+
+async function hydrateReviewFilter(filter: ReviewFilter, companyId: unknown): Promise<ReviewFilter> {
+  if (!filter.qrCodeId || filter.qrCodeLabel) return filter;
+
+  const qr = await CompanyQrCode.findOne({ _id: filter.qrCodeId, company: companyId }).select("label slug");
+  if (!qr) return filter;
+
+  return {
+    ...filter,
+    qrCodeLabel: qr.label || qr.slug || "QR choisi",
+  };
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isValidEmail(value: string) {
@@ -194,11 +424,45 @@ async function findOrCreateGuestCompany(email: string, qrName: string) {
     slug,
     feedbackUrl,
     qrCodeDataUrl,
-    freeMessagesLimit: 0,
     freeEmailNotificationsLimit: env.freeEmailNotifications,
     unlimitedAccess: true,
     unlimitedAccessActivatedAt: new Date(),
   });
+}
+
+async function sendQrAssets(
+  chatId: number,
+  companyName: string,
+  qrCode: any,
+  caption?: string,
+) {
+  if (!bot) return;
+
+  const qrImageBase64 = String(qrCode.qrCodeDataUrl).split(",")[1] || qrCode.qrCodeDataUrl;
+  const image = Buffer.from(qrImageBase64, "base64");
+  await bot.sendPhoto(chatId, image, {
+    caption:
+      caption ||
+      `QR code: <b>${escapeHtml(qrCode.label || "QR Code")}</b>\n\nLien:\n<code>${qrCode.feedbackUrl}</code>`,
+    parse_mode: "HTML",
+  });
+
+  const pdf = await buildQrPdfBuffer({
+    companyName,
+    feedbackUrl: qrCode.feedbackUrl,
+    qrCodeDataUrl: qrCode.qrCodeDataUrl,
+  });
+  await bot.sendDocument(
+    chatId,
+    pdf,
+    {
+      caption: "PDF imprimable",
+    },
+    {
+      filename: `${createSlug(qrCode.label || "qr-code") || "qr-code"}.pdf`,
+      contentType: "application/pdf",
+    },
+  );
 }
 
 async function createGuestQrCode(chatId: number, email: string, qrName: string) {
@@ -217,11 +481,17 @@ async function createGuestQrCode(chatId: number, email: string, qrName: string) 
     qrCodeDataUrl,
   });
 
-  const qrImageBase64 = qrCodeDataUrl.split(",")[1] || qrCodeDataUrl;
-  await bot.sendPhoto(chatId, Buffer.from(qrImageBase64, "base64"), {
-    caption: `QR code cree: <b>${escapeHtml(qrName)}</b>\n\nLes avis seront envoyes par email a <b>${escapeHtml(company.email)}</b>.\n\nLien de feedback:\n<code>${qrCode.feedbackUrl}</code>`,
-    parse_mode: "HTML",
-  });
+  await sendQrAssets(
+    chatId,
+    company.name,
+    qrCode,
+    `QR code cree: <b>${escapeHtml(qrName)}</b>\n\nLes avis seront envoyes par email a <b>${escapeHtml(company.email)}</b>.\n\nLien:\n<code>${qrCode.feedbackUrl}</code>`,
+  );
+  await sendTelegramKeyboard(
+    String(chatId),
+    "Que voulez-vous faire ensuite ?",
+    navigationKeyboard(undefined, [[{ text: "Creer un autre QR", callback_data: "guest_create_qr" }]]),
+  );
 }
 
 function hashTelegramLinkToken(token: string) {
@@ -252,9 +522,6 @@ async function verifyTelegramLinkToken(token: string) {
   return String(linkToken.user);
 }
 
-/**
- * Initialise le bot Telegram
- */
 export async function initializeTelegramBot() {
   const token =
     env.telegram.botToken || (await readFileSecret("telegramBotToken"));
@@ -269,7 +536,6 @@ export async function initializeTelegramBot() {
     env.telegram.webhookUrl ? { polling: false } : { polling: true },
   );
 
-  // Enregistrer les commandes
   registerCommands();
   registerCallbacks();
 
@@ -286,9 +552,6 @@ export function processTelegramUpdate(update: unknown) {
   bot.processUpdate(update as Parameters<TelegramBotConstructor["processUpdate"]>[0]);
 }
 
-/**
- * Enregistre les commandes du bot
- */
 function registerCommands() {
   if (!bot) return;
 
@@ -298,28 +561,19 @@ function registerCommands() {
   bot.onText(/\/create_qr/, handleCreateQr);
   bot.onText(/\/my_qr_codes/, handleMyQrCodes);
   bot.onText(/\/reviews/, handleReviews);
+  bot.onText(/\/avis/, handleReviews);
   bot.onText(/^\/search$/, handleSearchPrompt);
   bot.onText(/\/search (.+)/, handleSearch);
-  bot.onText(/\/stats/, handleStats);
   bot.onText(/\/ai/, handleAiOverview);
   bot.onText(/\/qr (.+)/, handleQrCommand);
-
-  // Message par défaut
   bot.on("message", handleDefaultMessage);
 }
 
-/**
- * Enregistre les callbacks pour les boutons
- */
 function registerCallbacks() {
   if (!bot) return;
-
   bot.on("callback_query", handleCallbackQuery);
 }
 
-/**
- * Commande /start - Initialiser/connecter l'utilisateur
- */
 async function handleStart(msg: TelegramMessage) {
   if (!bot) return;
 
@@ -328,6 +582,9 @@ async function handleStart(msg: TelegramMessage) {
   const token = msg.text?.match(/^\/start\s+(.+)$/)?.[1];
 
   if (!user) return;
+
+  // Le lien public du front utilise ?start=auth. Telegram envoie alors ce
+  // message au bot, qui ouvre une vraie Web App et fournit initData signe.
 
   if (token) {
     try {
@@ -341,249 +598,391 @@ async function handleStart(msg: TelegramMessage) {
       );
 
       if (!linkedUser) {
-        await bot.sendMessage(chatId, "Lien Telegram invalide ou expiré.");
+        await bot.sendMessage(chatId, "Lien Telegram invalide ou expire.");
       }
     } catch (error) {
       console.error("[telegram:link:error]", error);
       await bot.sendMessage(
         chatId,
-        "Lien Telegram invalide ou expiré. Veuillez relancer la connexion depuis vos paramètres QrFeedback.",
+        "Lien Telegram invalide ou expire. Relancez la connexion depuis QrFeedback.",
       );
     }
     return;
   }
 
-  // Chercher un utilisateur connecté
-  let dbUser = await findUserByTelegram(chatId);
+  const dbUser = await findUserByTelegram(chatId);
 
   if (!dbUser) {
-    // Menu pour les utilisateurs non connectés (guests)
-    const keyboard = [
-      [{ text: "Creer un QR code", callback_data: "guest_create_qr" }],
-      [
-        {
-          ...frontendButton("Se connecter à QrFeedback", "/login?redirect=/settings"),
-        },
-      ],
-    ];
-
     await sendTelegramKeyboard(
       String(chatId),
-      `👋 Bienvenue sur <b>QrFeedback</b>!\n\nPour recevoir vos avis sur Telegram, connectez votre compte QrFeedback puis liez Telegram depuis les paramètres.\n\nSans compte connecté, la création de QR code se fait depuis le site avec votre email et le nom de votre entreprise.`,
-      keyboard,
+      "<b>Bienvenue sur QrFeedback</b>\n\nCreez un QR rapidement ou connectez votre compte pour gerer avis, QR codes et notifications depuis Telegram.",
+      [
+        [{ text: "Creer un QR", callback_data: "guest_create_qr" }],
+        [frontendButton("Se connecter a QrFeedback", "/login?redirect=/settings")],
+      ],
     );
     return;
   }
 
-  // Menu pour les utilisateurs connectés (avec accès complet)
-  const companyName =
-    typeof dbUser.company === "object"
-      ? (dbUser.company as any)?.name
-      : "QrFeedback";
-  await sendTelegramKeyboard(
-    String(chatId),
-    `👋 Bienvenue <b>${companyName}</b>!\n\nQue souhaitez-vous faire ?`,
-    [
-      [{ text: "➕ Créer un QR code", callback_data: "create_qr" }],
-      [{ text: "📋 Mes QR codes", callback_data: "my_qr_codes" }],
-      [{ text: "⭐ Mes avis", callback_data: "my_reviews" }],
-      [{ text: "📊 Statistiques", callback_data: "dashboard_stats" }],
-      [{ text: "🤖 Analyse IA", callback_data: "ai_overview" }],
-      [{ text: "🔍 Rechercher", callback_data: "search_reviews" }],
-      [frontendButton("🌐 Ouvrir le dashboard", "/dashboard")],
-      [frontendButton("⚙️ Réglages web", "/settings")],
-      [{ text: "🔔 Notifications", callback_data: "settings" }],
-    ],
-  );
+  await sendMainMenu(chatId);
 }
 
-/**
- * Commande /help - Afficher l'aide
- */
+async function sendMainMenu(chatId: number, messageId?: number) {
+  const dbUser = await findUserByTelegram(chatId);
+  const company = dbUser?.company ? await Company.findById(dbUser.company) : null;
+  const companyName = company?.name || "QrFeedback";
+  const text = `<b>Menu principal</b>\n\n${escapeHtml(companyName)}, que souhaitez-vous faire ?`;
+
+  if (messageId) {
+    await editTelegramMessage(String(chatId), messageId, text, mainMenuKeyboard());
+    return;
+  }
+
+  await sendTelegramKeyboard(String(chatId), text, mainMenuKeyboard());
+}
+
 async function handleHelp(msg: TelegramMessage) {
   if (!bot) return;
-
-  const chatId = msg.chat.id;
-
-  const helpText = `<b>📖 Aide - Commandes disponibles:</b>
-
-<b>Gestion des QR codes:</b>
-/create_qr - Créer un nouveau QR code
-/my_qr_codes - Voir mes QR codes
-
-<b>Gestion des avis:</b>
-/reviews - Voir mes avis récents
-/search [texte] - Rechercher des avis similaires
-/stats - Voir les statistiques
-/ai - Voir l'analyse IA
-
-<b>Autres:</b>
-/settings - Gérer mes paramètres
-/help - Afficher cette aide`;
-
-  await bot.sendMessage(chatId, helpText, { parse_mode: "HTML" });
+  await sendHelp(msg.chat.id);
 }
 
-/**
- * Commande /settings - Gérer les paramètres
- */
+async function sendHelp(chatId: number, messageId?: number) {
+  const text = `<b>Aide QrFeedback</b>
+
+Commandes utiles:
+/avis - avis recents et filtres
+/create_qr - creation guidee de QR code
+/my_qr_codes - liste des QR codes
+/ai - analyse IA
+/settings - preferences de notification`;
+
+  const keyboard = navigationKeyboard(undefined);
+  if (messageId) {
+    await editTelegramMessage(String(chatId), messageId, text, keyboard);
+    return;
+  }
+  await sendTelegramKeyboard(String(chatId), text, keyboard);
+}
+
 async function handleSettings(msg: TelegramMessage) {
   if (!bot) return;
+  await sendSettings(msg.chat.id);
+}
 
-  const chatId = msg.chat.id;
+async function sendSettings(chatId: number, messageId?: number) {
+  if (!bot) return;
+
   const dbUser = await findUserByTelegram(chatId);
-
   if (!dbUser) {
-    await bot.sendMessage(
-      chatId,
-      "❌ Vous n'êtes pas connecté. Utilisez /start pour commencer.",
-    );
+    await bot.sendMessage(chatId, "Vous n'etes pas connecte. Utilisez /start pour commencer.");
     return;
   }
 
-  const prefs = dbUser.notificationPreferences;
-  const preferredChannel = prefs?.preferredChannel || "email";
+  const company = dbUser.company ? await Company.findById(dbUser.company) : null;
+  if (!company) {
+    await bot.sendMessage(chatId, "Entreprise introuvable.");
+    return;
+  }
 
-  const text = `<b>⚙️ Vos paramètres</b>
+  const prefs = company.notificationPreferences;
+  const text = `<b>Parametres</b>
 
-<b>Canal de notification préféré:</b>
-${preferredChannel === "telegram" ? "📱 Telegram" : "📧 Email"}
+Notifications globales:
+Email: <b>${prefs?.emailEnabled !== false ? "actif" : "desactive"}</b>
+Telegram: <b>${prefs?.telegramEnabled !== false ? "actif" : "desactive"}</b>
 
-<b>Canaux activés:</b>
-${prefs?.channels?.email ? "✅" : "❌"} Email
-${prefs?.channels?.telegram ? "✅" : "❌"} Telegram`;
+Chaque QR code peut avoir son propre reglage. Le reglage du QR passe avant ce reglage global.`;
 
-  await sendTelegramKeyboard(String(chatId), text, [
-    [
-      {
-        text: "📧 Définir Email comme préféré",
-        callback_data: "set_channel_email",
-      },
-    ],
-    [
-      {
-        text: "📱 Définir Telegram comme préféré",
-        callback_data: "set_channel_telegram",
-      },
-    ],
-    [{ text: "🔙 Retour", callback_data: "main_menu" }],
+  const keyboard = navigationKeyboard(undefined, [
+    [{ text: `${prefs?.emailEnabled !== false ? "Desactiver" : "Activer"} Email`, callback_data: "toggle_company_email" }],
+    [{ text: `${prefs?.telegramEnabled !== false ? "Desactiver" : "Activer"} Telegram`, callback_data: "toggle_company_telegram" }],
   ]);
+
+  if (messageId) {
+    await editTelegramMessage(String(chatId), messageId, text, keyboard);
+    return;
+  }
+  await sendTelegramKeyboard(String(chatId), text, keyboard);
 }
 
-/**
- * Commande /create_qr - Créer un QR code
- */
 async function handleCreateQr(msg: TelegramMessage) {
   if (!bot) return;
-
-  const chatId = msg.chat.id;
-  const dbUser = await findUserByTelegram(chatId);
-
-  if (!dbUser) {
-    setUserContext(chatId, msg.from?.id, "guest_create_email");
-    await bot.sendMessage(
-      chatId,
-      "Pour creer votre QR code, tapez votre adresse email.",
-    );
-    return;
-  }
-
-  if (!dbUser) {
-    await sendTelegramKeyboard(
-      String(chatId),
-      "Pour créer un QR code sans compte connecté, utilisez le site avec votre email et le nom de votre entreprise.",
-      [[frontendButton("Créer mon QR code")]],
-    );
-    return;
-  }
-
-  setUserContext(chatId, msg.from?.id, "creating_qr");
-
-  const text = `<b>➕ Créer un QR code</b>\n\nTapez simplement le libellé du QR code.\n\nPar exemple: <code>Table 1</code>, <code>Caisse</code> ou <code>Mon Restaurant</code>`;
-
-  await bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+  await startQrCreation(msg.chat.id, msg.from?.id);
 }
 
-/**
- * Commande /my_qr_codes - Lister les QR codes de l'utilisateur
- */
-async function handleMyQrCodes(msg: TelegramMessage) {
+async function startQrCreation(chatId: number, telegramUserId?: number) {
   if (!bot) return;
 
-  const chatId = msg.chat.id;
   const dbUser = await findUserByTelegram(chatId);
-
   if (!dbUser) {
-    await bot.sendMessage(chatId, "❌ Vous n'êtes pas connecté.");
+    setUserContext(chatId, telegramUserId, "guest_create_email");
+    await sendTelegramKeyboard(
+      String(chatId),
+      "<b>Creer un QR</b>\n\nTapez votre adresse email.",
+      navigationKeyboard(undefined),
+    );
     return;
   }
 
-  const qrCodes = await CompanyQrCode.find({ company: dbUser.company }).limit(
-    10,
+  setUserContext(chatId, telegramUserId, "creating_qr_name");
+  await sendTelegramKeyboard(
+    String(chatId),
+    "<b>Creer un QR</b>\n\n1/3 - Tapez le nom du QR code.\n\nExemples: Table 1, Caisse, Chambre 204.",
+    navigationKeyboard(undefined),
   );
+}
 
-  if (qrCodes.length === 0) {
-    await bot.sendMessage(chatId, "📭 Vous n'avez pas encore de QR code.");
+async function handleMyQrCodes(msg: TelegramMessage) {
+  if (!bot) return;
+  await sendQrCodes(msg.chat.id);
+}
+
+async function sendQrCodes(chatId: number, messageId?: number, page = 1) {
+  if (!bot) return;
+
+  const dbUser = await findUserByTelegram(chatId);
+  if (!dbUser) {
+    await bot.sendMessage(chatId, "Vous n'etes pas connecte.");
     return;
   }
 
-  let text = "<b>📋 Mes QR codes</b>\n\n";
-  text += qrCodes
+  const safePage = Math.max(1, Number(page || 1));
+  const qrCodes = await CompanyQrCode.find({ company: dbUser.company })
+    .sort({ createdAt: -1 })
+    .skip((safePage - 1) * QR_CODES_PER_TELEGRAM_PAGE)
+    .limit(QR_CODES_PER_TELEGRAM_PAGE + 1);
+  const hasNextPage = qrCodes.length > QR_CODES_PER_TELEGRAM_PAGE;
+  const pageQrCodes = qrCodes.slice(0, QR_CODES_PER_TELEGRAM_PAGE);
+
+  if (pageQrCodes.length === 0) {
+    const emptyKeyboardExtra: TelegramInlineButton[][] = [
+      ...(safePage > 1 ? [[{ text: "Precedent", callback_data: `my_qr_codes_page_${safePage - 1}` }]] : []),
+      [{ text: "Creer un QR", callback_data: "create_qr" }],
+    ];
+    await sendTelegramKeyboard(
+      String(chatId),
+      `<b>Mes QR codes</b>\nPage ${safePage}\n\nAucun QR code pour le moment.`,
+      navigationKeyboard(undefined, emptyKeyboardExtra),
+    );
+    return;
+  }
+
+  const text = `<b>Mes QR codes</b>\nPage ${safePage}\n\nTapez sur un bouton <b>Voir QR</b> pour ouvrir un QR code.\n\n${pageQrCodes
     .map(
       (qr, i) =>
-        `${i + 1}. <b>${qr.label || "QR Code"}</b>\nLien: ${qr.feedbackUrl || "N/A"}`,
+        `${i + 1}. <b>${escapeHtml(qr.label || "QR Code")}</b> - ${qr.isActive ? "actif" : "inactif"}`,
     )
-    .join("\n\n");
+    .join("\n")}`;
+
+  const keyboard: TelegramInlineButton[][] = [];
+  for (let i = 0; i < pageQrCodes.length; i += 2) {
+    const row: TelegramInlineButton[] = [
+      { text: `Voir QR ${i + 1}`, callback_data: `qr_detail_${pageQrCodes[i]._id}` },
+    ];
+    if (pageQrCodes[i + 1]) {
+      row.push({ text: `Voir QR ${i + 2}`, callback_data: `qr_detail_${pageQrCodes[i + 1]._id}` });
+    }
+    keyboard.push(row);
+  }
+  if (safePage > 1 || hasNextPage) {
+    const row: TelegramInlineButton[] = [];
+    if (safePage > 1) row.push({ text: "Precedent", callback_data: `my_qr_codes_page_${safePage - 1}` });
+    if (hasNextPage) row.push({ text: "Suivant", callback_data: `my_qr_codes_page_${safePage + 1}` });
+    keyboard.push(row);
+  }
+  keyboard.push([{ text: "Creer un QR", callback_data: "create_qr" }]);
+  keyboard.push([{ text: "Retour", callback_data: "main_menu" }]);
+  keyboard.push([{ text: "Menu principal", callback_data: "main_menu" }]);
+
+  if (messageId) {
+    await editTelegramMessage(String(chatId), messageId, text, keyboard);
+    return;
+  }
+  await sendTelegramKeyboard(String(chatId), text, keyboard);
+}
+
+async function handleReviews(msg: TelegramMessage) {
+  if (!bot) return;
+  await sendReviews(msg.chat.id);
+}
+
+async function sendReviews(chatId: number, messageId?: number, filter: ReviewFilter = {}) {
+  if (!bot) return;
+
+  const dbUser = await findUserByTelegram(chatId);
+  if (!dbUser) {
+    await bot.sendMessage(chatId, "Vous n'etes pas connecte.");
+    return;
+  }
+
+  const activeFilter = await hydrateReviewFilter(filter, dbUser.company);
+  const query: Record<string, unknown> = { company: dbUser.company };
+  if (activeFilter.rating) query.rating = activeFilter.rating;
+  if (activeFilter.sentiment === "positive") query.rating = { $in: [4, 5] };
+  if (activeFilter.sentiment === "neutral") query.rating = 3;
+  if (activeFilter.sentiment === "negative") query.rating = { $in: [1, 2] };
+  if (activeFilter.moderationStatus === "archived") {
+    query.moderationStatus = "archived";
+  } else {
+    query.moderationStatus = { $ne: "archived" };
+  }
+  if (activeFilter.qrCodeId) query.qrCode = activeFilter.qrCodeId;
+  if (activeFilter.tag) query.tags = { $regex: `^${escapeRegExp(activeFilter.tag)}$`, $options: "i" };
+  const page = Math.max(1, Number(activeFilter.page || 1));
+
+  const reviews = await Review.find(query)
+    .populate("qrCode", "label slug feedbackUrl")
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * REVIEWS_PER_TELEGRAM_PAGE)
+    .limit(REVIEWS_PER_TELEGRAM_PAGE + 1);
+  const hasNextPage = reviews.length > REVIEWS_PER_TELEGRAM_PAGE;
+  const pageReviews = reviews.slice(0, REVIEWS_PER_TELEGRAM_PAGE);
+
+  const title = buildReviewListTitle(activeFilter);
+  if (pageReviews.length === 0) {
+    const text = `<b>${title}</b>\nPage ${page}\n\nAucun avis ne correspond a ce filtre.`;
+    if (messageId) {
+      await editTelegramMessage(String(chatId), messageId, text, reviewListKeyboard({ ...activeFilter, page }, false));
+      return;
+    }
+    await sendTelegramKeyboard(String(chatId), text, reviewListKeyboard({ ...activeFilter, page }, false));
+    return;
+  }
+
+  const text = `<b>${title}</b>\nPage ${page}\n\n${pageReviews
+    .map((review, i) => formatShortReviewSummary(review, i))
+    .join("\n\n")}`;
+
+  const keyboard: TelegramInlineButton[][] = [];
+  for (let i = 0; i < pageReviews.length; i += 2) {
+    const row: TelegramInlineButton[] = [];
+    row.push({ text: `Voir avis ${i + 1}`, callback_data: `review_detail_${pageReviews[i]._id}` });
+    if (pageReviews[i + 1]) {
+      row.push({ text: `Voir avis ${i + 2}`, callback_data: `review_detail_${pageReviews[i + 1]._id}` });
+    }
+    keyboard.push(row);
+  }
+  keyboard.push(...reviewListKeyboard({ ...activeFilter, page }, hasNextPage));
+
+  if (messageId) {
+    await editTelegramMessage(String(chatId), messageId, text, keyboard);
+    return;
+  }
+  await sendTelegramKeyboard(String(chatId), text, keyboard);
+}
+
+async function exportReviewsForChat(chatId: number, filter: ReviewFilter = {}) {
+  if (!bot) return;
+  const user = await findUserByTelegram(chatId);
+  if (!user) return;
+  const active = await hydrateReviewFilter(filter, user.company);
+  const query: Record<string, unknown> = {};
+  if (active.rating) query.rating = active.rating;
+  if (active.sentiment === 'positive') query.rating = { $in: [4, 5] };
+  if (active.sentiment === 'neutral') query.rating = 3;
+  if (active.sentiment === 'negative') query.rating = { $in: [1, 2] };
+  query.moderationStatus = active.moderationStatus === 'archived' ? 'archived' : { $ne: 'archived' };
+  if (active.qrCodeId) query.qrCode = active.qrCodeId;
+  if (active.tag) query.tags = { $regex: `^${escapeRegExp(active.tag)}$`, $options: 'i' };
+  const company = await Company.findById(user.company);
+  if (!company) return;
+  const buffer = await buildCompanyReviewsExcel(company as any, query);
+  await bot.sendDocument(chatId, Buffer.from(buffer), { caption: 'Export Excel des avis' }, { filename: 'avis.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+async function sendReviewQrFilter(chatId: number, messageId: number, filter: ReviewFilter = {}) {
+  const dbUser = await findUserByTelegram(chatId);
+  if (!dbUser) return;
+
+  const qrCodes = await CompanyQrCode.find({ company: dbUser.company })
+    .sort({ createdAt: -1 })
+    .limit(20);
 
   const keyboard = qrCodes.map((qr) => [
     {
       text: qr.label || "QR Code",
-      callback_data: `qr_detail_${qr._id}`,
+      callback_data: `reviews_qr_${createReviewFilterToken({
+        ...resetReviewFilterPage(filter),
+        qrCodeId: String(qr._id),
+        qrCodeLabel: qr.label || qr.slug || "QR Code",
+      })}`,
     },
   ]);
+  const token = createReviewFilterToken(filter);
+  keyboard.push([{ text: "Retour", callback_data: `reviews_filters_${token}` }]);
+  keyboard.push([{ text: "Menu principal", callback_data: "main_menu" }]);
 
-  keyboard.push([{ text: "🔙 Retour", callback_data: "main_menu" }]);
-
-  await sendTelegramKeyboard(String(chatId), text, keyboard);
+  await editTelegramMessage(
+    String(chatId),
+    messageId,
+    "<b>Filtrer par QR code</b>\n\nChoisissez un QR code.",
+    keyboard,
+  );
 }
 
-/**
- * Commande /reviews - Afficher les avis récents
- */
-async function handleReviews(msg: TelegramMessage) {
-  if (!bot) return;
-
-  const chatId = msg.chat.id;
+async function sendReviewTagFilter(chatId: number, messageId: number, filter: ReviewFilter = {}) {
   const dbUser = await findUserByTelegram(chatId);
+  if (!dbUser) return;
 
-  if (!dbUser) {
-    await bot.sendMessage(chatId, "❌ Vous n'êtes pas connecté.");
-    return;
-  }
+  const activeFilter = await hydrateReviewFilter(filter, dbUser.company);
+  const distinctQuery: Record<string, unknown> = {
+    company: dbUser.company,
+    tags: { $exists: true, $ne: "" },
+  };
+  if (activeFilter.qrCodeId) distinctQuery.qrCode = activeFilter.qrCodeId;
 
-  const reviews = await Review.find({ company: dbUser.company })
-    .populate("qrCode", "label slug")
-    .sort({ createdAt: -1 })
-    .limit(5);
+  const tags = (
+    await Review.distinct("tags", distinctQuery)
+  )
+    .map((tag) => String(tag).trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "fr"));
 
-  if (reviews.length === 0) {
-    await bot.sendMessage(chatId, "📭 Vous n'avez pas d'avis pour le moment.");
-    return;
-  }
-
-  let text = "<b>⭐ Mes avis récents</b>\n\n";
-  text += reviews.map((review, i) => formatReviewSummary(review, i)).join("\n\n");
-
-  const keyboard = reviews.map((review) => [
+  const filterToken = createReviewFilterToken(activeFilter);
+  const tagButtons = tags.slice(0, 20).map((tag) => [
     {
-      text: `⭐ ${review.rating}/5`,
-      callback_data: `review_detail_${review._id}`,
+      text: tag,
+      callback_data: `reviews_tag_${createReviewTagToken(dbUser.company, tag)}_${filterToken}`,
     },
   ]);
 
-  keyboard.push([{ text: "🔙 Retour", callback_data: "main_menu" }]);
+  const keyboard: TelegramInlineButton[][] = [
+    [{ text: "Rechercher un tag", callback_data: `reviews_search_tag_${filterToken}` }],
+    ...tagButtons,
+    [{ text: "Retour", callback_data: `reviews_filters_${filterToken}` }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
+  ];
 
-  await sendTelegramKeyboard(String(chatId), text, keyboard);
+  const qrLine = activeFilter.qrCodeId
+    ? `\nQR actif: <b>${escapeHtml(activeFilter.qrCodeLabel || "QR choisi")}</b>\n`
+    : "";
+  const text = tags.length
+    ? `<b>Filtrer par tag</b>${qrLine}\nChoisissez un tag existant ou recherchez un tag precis.`
+    : `<b>Filtrer par tag</b>${qrLine}\nAucun tag existant pour le moment. Vous pouvez quand meme rechercher un tag.`;
+
+  await editTelegramMessage(String(chatId), messageId, text, keyboard);
+}
+
+async function askReviewTagSearch(chatId: number, telegramUserId: number | undefined, filter: ReviewFilter = {}) {
+  setUserContext(chatId, telegramUserId, "review_search_tag", { qrName: createReviewFilterToken(filter) });
+  await sendTelegramKeyboard(
+    String(chatId),
+    "Tapez le tag a rechercher.",
+    navigationKeyboard(`reviews_filters_${createReviewFilterToken(filter)}`),
+  );
+}
+
+async function searchReviewsByTag(chatId: number, telegramUserId: number | undefined, tag: string) {
+  const cleanTag = tag.trim();
+  if (!cleanTag) {
+    await bot?.sendMessage(chatId, "Tapez un tag valide.");
+    return;
+  }
+
+  const context = getUserContext(chatId, telegramUserId);
+  const filter = context?.qrName ? getReviewFilterToken(context.qrName) : {};
+  clearUserContext(chatId, telegramUserId);
+  await sendReviews(chatId, undefined, { ...resetReviewFilterPage(filter), tag: cleanTag });
 }
 
 async function findTelegramUserCompany(chatId: number) {
@@ -596,40 +995,31 @@ async function findTelegramUserCompany(chatId: number) {
   return { dbUser, company };
 }
 
-async function handleStats(msg: TelegramMessage) {
-  if (!bot) return;
-  await sendStatsForChat(msg.chat.id);
-}
-
 async function sendStatsForChat(chatId: number, messageId?: number) {
   if (!bot) return;
 
   const context = await findTelegramUserCompany(chatId);
   if (!context) {
-    await bot.sendMessage(chatId, "❌ Vous n'êtes pas connecté.");
+    await bot.sendMessage(chatId, "Vous n'etes pas connecte.");
     return;
   }
 
   const stats = await getCompanyStats(context.company);
-  const remainingEmailText = stats.unlimitedAccess
-    ? "Illimite"
-    : String(stats.remainingEmailNotifications);
-  const text = `<b>📊 Statistiques - ${context.company.name}</b>
+  const text = `<b>Statistiques - ${escapeHtml(context.company.name)}</b>
 
-Avis collectés: <b>${stats.count}</b>
+Avis collectes: <b>${stats.count}</b>
+Scans: <b>${stats.scanCount}</b>
+Conversion scan vers avis: <b>${formatPercent(stats.conversionRate)}</b>
+Repere: <b>10% a 30%</b> est generalement sain.
 Note moyenne: <b>${stats.averageRating}/5</b>
-Notifications email restantes: <b>${remainingEmailText}</b>`;
+Application: <b>gratuite</b>`;
 
-  const keyboard = [
-    [frontendButton("Ouvrir le dashboard", "/dashboard")],
-    [{ text: "🔙 Retour", callback_data: "main_menu" }],
-  ];
+  const keyboard = navigationKeyboard(undefined, [[frontendButton("Ouvrir le dashboard", "/dashboard")]]);
 
   if (messageId) {
     await editTelegramMessage(String(chatId), messageId, text, keyboard);
     return;
   }
-
   await sendTelegramKeyboard(String(chatId), text, keyboard);
 }
 
@@ -638,67 +1028,63 @@ async function handleAiOverview(msg: TelegramMessage) {
   await sendAiOverviewForChat(msg.chat.id);
 }
 
-async function sendAiOverviewForChat(chatId: number, messageId?: number) {
+async function sendAiOverviewForChat(chatId: number, messageId?: number, qrCodeId?: string, qrCodeLabel?: string) {
   if (!bot) return;
 
   const context = await findTelegramUserCompany(chatId);
   if (!context) {
-    await bot.sendMessage(chatId, "❌ Vous n'êtes pas connecté.");
+    await bot.sendMessage(chatId, "Vous n'etes pas connecte.");
     return;
   }
 
-  const overview = await getAiOverview(context.company);
+  const qr = qrCodeId ? await CompanyQrCode.findOne({ _id: qrCodeId, company: context.company._id }) : null;
+  const overview = await getAiOverview(context.company, { qrCodeId });
+  const title = qrCodeId
+    ? qrCodeLabel || qr?.label || qr?.slug || "QR choisi"
+    : context.company.name;
   const topProblems = overview.problems
     .slice(0, 3)
     .map(
       (problem, index) =>
-        `${index + 1}. ${problem.label} (${problem.count} avis, note ${problem.averageRating}/5)`,
+        `${index + 1}. ${escapeHtml(problem.label)} (${problem.count} avis, note ${problem.averageRating}/5)`,
     )
     .join("\n");
 
-  const text = `<b>🤖 Analyse IA - ${context.company.name}</b>
+  const text = `<b>Analyse IA - ${escapeHtml(title)}</b>
 
-Avis analysés: <b>${overview.totalReviews}</b>
+Avis analyses: <b>${overview.totalReviews}</b>
 Positif: <b>${overview.sentiment.positiveRate}%</b>
-Négatif: <b>${overview.sentiment.negativeRate}%</b>
+Negatif: <b>${overview.sentiment.negativeRate}%</b>
 
 <b>Tendance</b>
-${overview.trends.text}
+${escapeHtml(overview.trends.text)}
 
 <b>Sujets principaux</b>
-${topProblems || "Aucun sujet récurrent détecté."}`;
+${topProblems || "Aucun sujet recurrent detecte."}`;
 
-  const keyboard = [
-    [frontendButton("Ouvrir l'analyse IA", "/ai")],
-    [{ text: "🔙 Retour", callback_data: "main_menu" }],
-  ];
+  const keyboard = navigationKeyboard(undefined, [[frontendButton("Ouvrir l'analyse IA", "/ai")]]);
 
   if (messageId) {
     await editTelegramMessage(String(chatId), messageId, text, keyboard);
     return;
   }
-
   await sendTelegramKeyboard(String(chatId), text, keyboard);
 }
 
-/**
- * Commande /search - Rechercher des avis
- */
 async function handleSearchPrompt(msg: TelegramMessage) {
   if (!bot) return;
 
-  const chatId = msg.chat.id;
-  const dbUser = await findUserByTelegram(chatId);
-
+  const dbUser = await findUserByTelegram(msg.chat.id);
   if (!dbUser) {
-    await bot.sendMessage(chatId, "❌ Vous n'êtes pas connecté.");
+    await bot.sendMessage(msg.chat.id, "Vous n'etes pas connecte.");
     return;
   }
 
-  setUserContext(chatId, msg.from?.id, "search_reviews");
-  await bot.sendMessage(
-    chatId,
-    'Tapez votre recherche (ex: "qualité du service").',
+  setUserContext(msg.chat.id, msg.from?.id, "search_reviews");
+  await sendTelegramKeyboard(
+    String(msg.chat.id),
+    'Tapez votre recherche, par exemple "qualite du service".',
+    navigationKeyboard("my_reviews"),
   );
 }
 
@@ -708,26 +1094,25 @@ async function handleSearch(
 ) {
   if (!bot || !match) return;
 
-  const chatId = msg.chat.id;
-  const query = match[1]?.trim();
-  await searchReviewsForChat(chatId, query);
+  await searchReviewsForChat(msg.chat.id, match[1]?.trim());
 }
 
-async function searchReviewsForChat(chatId: number, query: string) {
+async function searchReviewsForChat(chatId: number, query: string, filter: ReviewFilter = {}) {
   if (!bot) return;
 
   const dbUser = await findUserByTelegram(chatId);
 
   if (!dbUser) {
-    await bot.sendMessage(chatId, "❌ Vous n'êtes pas connecté.");
+    await bot.sendMessage(chatId, "Vous n'etes pas connecte.");
     return;
   }
 
   if (!query) {
     setUserContext(chatId, undefined, "search_reviews");
-    await bot.sendMessage(
-      chatId,
-      'Tapez votre recherche (ex: "qualité du service").',
+    await sendTelegramKeyboard(
+      String(chatId),
+      'Tapez votre recherche, par exemple "qualite du service".',
+      navigationKeyboard("my_reviews"),
     );
     return;
   }
@@ -738,63 +1123,48 @@ async function searchReviewsForChat(chatId: number, query: string) {
       query,
       1,
       5,
+      { qrCodeId: filter.qrCodeId },
     );
 
     if (!results || results.documents.length === 0) {
-      await bot?.sendMessage(chatId, `❌ Aucun avis trouvé pour "${query}".`);
+      await sendTelegramKeyboard(
+        String(chatId),
+        `Aucun avis trouve pour "${escapeHtml(query)}".`,
+        navigationKeyboard("my_reviews"),
+      );
       return;
     }
 
-    let text = `<b>🔍 Résultats pour "${query}"</b>\n\n`;
-    text += results.documents
+    const text = `<b>Resultats pour "${escapeHtml(query)}"</b>\n\n${results.documents
       .map(
         (result: any, i: number) =>
-          `${i + 1}. <b>${result.rating}/5</b>\n${(result.serviceFeedback || "Sans commentaire").slice(0, 100)}...`,
+          `${i + 1}. <b>${result.rating}/5</b>\n${escapeHtml(result.serviceFeedback || "Sans commentaire").slice(0, 120)}`,
       )
-      .join("\n\n");
+      .join("\n\n")}`;
 
-    await bot?.sendMessage(chatId, text, { parse_mode: "HTML" });
+    await sendTelegramKeyboard(String(chatId), text, navigationKeyboard("my_reviews"));
   } catch (error) {
     console.error("[telegram:search:error]", error);
-    await bot?.sendMessage(
-      chatId,
-      "❌ Une erreur est survenue lors de la recherche.",
-    );
+    await bot.sendMessage(chatId, "Une erreur est survenue lors de la recherche.");
   }
 }
 
-/**
- * Commande /qr - Créer un QR code avec un nom
- */
 async function handleQrCommand(
   msg: TelegramMessage,
   match: RegExpExecArray | null,
 ) {
   if (!bot || !match) return;
-
-  // handleCreateQrFromMessage s'attend à ce que msg.text soit "qr NOM" ou "/qr NOM"
-  // On modifie msg.text temporairement pour qu'il corresponde au format attendu
-  const originalText = msg.text;
-  msg.text = `qr ${match[1]}`;
-
-  await handleCreateQrFromMessage(msg);
-
-  msg.text = originalText;
+  await createConnectedQr(msg.chat.id, match[1].trim(), true, true);
 }
 
-/**
- * Gestion des messages par défaut
- */
 async function handleDefaultMessage(msg: TelegramMessage) {
   if (!bot) return;
 
   const chatId = msg.chat.id;
   const text = msg.text || "";
 
-  // Ignore les commandes
   if (text.startsWith("/")) return;
 
-  // Vérifier le contexte utilisateur
   const userContext = getUserContext(chatId, msg.from?.id);
 
   if (userContext?.state === "guest_create_email") {
@@ -811,17 +1181,14 @@ async function handleDefaultMessage(msg: TelegramMessage) {
     }
 
     setUserContext(chatId, msg.from?.id, "guest_create_label", { email });
-    await bot.sendMessage(
-      chatId,
-      "Merci. Tapez maintenant le libelle du QR code, par exemple: Mon restaurant.",
-    );
+    await bot.sendMessage(chatId, "Merci. Tapez maintenant le nom du QR code.");
     return;
   }
 
   if (userContext?.state === "guest_create_label") {
     const qrName = text.trim();
     if (qrName.length < 2) {
-      await bot.sendMessage(chatId, "Tapez un libelle plus precis pour le QR code.");
+      await bot.sendMessage(chatId, "Tapez un nom plus precis pour le QR code.");
       return;
     }
 
@@ -830,36 +1197,63 @@ async function handleDefaultMessage(msg: TelegramMessage) {
     return;
   }
 
-  // Si l'utilisateur est en train de créer un QR code, créer avec ce texte
-  if (userContext?.state === "creating_qr") {
-    clearUserContext(chatId, msg.from?.id); // Réinitialiser le contexte
-    msg.text = `qr ${text}`; // Ajouter le préfixe pour la compatibilité
-    await handleCreateQrFromMessage(msg);
+  if (userContext?.state === "creating_qr_name") {
+    const qrName = text.trim();
+    if (qrName.length < 2) {
+      await bot.sendMessage(chatId, "Tapez un nom plus precis pour le QR code.");
+      return;
+    }
+
+    setUserContext(chatId, msg.from?.id, "creating_qr_name", { qrName });
+    await sendTelegramKeyboard(
+      String(chatId),
+      `<b>Creer un QR</b>\n\n2/3 - Activer les notifications email pour <b>${escapeHtml(qrName)}</b> ?`,
+      [
+        [
+          { text: "Oui", callback_data: "qr_email_yes" },
+          { text: "Non", callback_data: "qr_email_no" },
+        ],
+        [{ text: "Retour", callback_data: "create_qr" }],
+        [{ text: "Menu principal", callback_data: "main_menu" }],
+      ],
+    );
+    return;
+  }
+
+  if (userContext?.state === "review_add_tag") {
+    await addReviewTags(chatId, msg.from?.id, userContext.reviewId, text);
+    return;
+  }
+
+  if (userContext?.state === "review_reply") {
+    await replyToReview(chatId, msg.from?.id, userContext.reviewId, text);
+    return;
+  }
+
+  if (userContext?.state === "review_search_tag") {
+    await searchReviewsByTag(chatId, msg.from?.id, text);
     return;
   }
 
   if (userContext?.state === "search_reviews") {
+    const filter = userContext.qrName ? getReviewFilterToken(userContext.qrName) : {};
     clearUserContext(chatId, msg.from?.id);
-    await searchReviewsForChat(chatId, text.trim());
+    await searchReviewsForChat(chatId, text.trim(), filter);
     return;
   }
 
-  // Si c'est une tentative de créer un QR code via message
   if (text.startsWith("qr ") || text.startsWith("QR ")) {
-    await handleCreateQrFromMessage(msg);
+    await createConnectedQr(chatId, text.replace(/^qr\s+/i, "").trim(), true, true);
     return;
   }
 
-  // Message générique
-  await bot.sendMessage(
-    chatId,
-    "Je n'ai pas compris votre demande. Tapez /help pour voir les commandes disponibles.",
+  await sendTelegramKeyboard(
+    String(chatId),
+    "Je n'ai pas compris votre demande. Utilisez le menu ci-dessous.",
+    mainMenuKeyboard(),
   );
 }
 
-/**
- * Gestion des callback queries (boutons)
- */
 async function handleCallbackQuery(query: TelegramCallbackQuery) {
   if (!bot) return;
 
@@ -873,93 +1267,40 @@ async function handleCallbackQuery(query: TelegramCallbackQuery) {
     if (data === "frontend_url_unavailable") {
       await bot.sendMessage(
         chatId,
-        `L'interface web est configurée en local (${env.frontendUrl}). Telegram n'autorise pas les boutons vers localhost. Ouvrez QrFeedback dans votre navigateur, ou configurez FRONTEND_URL avec une URL publique HTTPS.`,
+        `L'interface web est configuree en local (${env.frontendUrl}). Configurez FRONTEND_URL avec une URL publique HTTPS pour ouvrir ce bouton depuis Telegram.`,
       );
       await answerCallbackQuery(query.id);
       return;
     }
 
-    // Les callbacks guest ne nécessitent pas de connexion
     if (data === "guest_create_qr") {
       setUserContext(chatId, query.from.id, "guest_create_email");
-      await bot.sendMessage(
-        chatId,
-        "Pour creer votre QR code, tapez votre adresse email.",
-      );
+      await bot.sendMessage(chatId, "Pour creer votre QR code, tapez votre adresse email.");
       await answerCallbackQuery(query.id);
       return;
     }
 
-    // Pour les autres callbacks, vérifier la connexion
     const dbUser = await findUserByTelegram(chatId);
 
     if (!dbUser) {
       if (data === "create_qr") {
         setUserContext(chatId, query.from.id, "guest_create_email");
-        await bot.sendMessage(
-          chatId,
-          "Pour creer votre QR code, tapez votre adresse email.",
-        );
+        await bot.sendMessage(chatId, "Pour creer votre QR code, tapez votre adresse email.");
         await answerCallbackQuery(query.id);
         return;
       }
 
-      if (
-        data === "connect_telegram_" ||
-        data.startsWith("connect_telegram_")
-      ) {
-        // Permettre le callback de connexion même sans compte
-        await handleConnectTelegramCallback(chatId, messageId, data);
+      if (data.startsWith("connect_telegram_")) {
+        await handleConnectTelegramCallback(chatId);
         await answerCallbackQuery(query.id);
         return;
       }
 
-      await answerCallbackQuery(
-        query.id,
-        "Vous devez être connecté pour cette action",
-        true,
-      );
+      await answerCallbackQuery(query.id, "Vous devez etre connecte pour cette action", true);
       return;
     }
 
-    // Routing des callbacks pour utilisateurs connectés
-    if (data === "main_menu") {
-      await handleMainMenu(chatId, messageId, dbUser._id);
-    } else if (data === "create_qr") {
-      await handleCreateQrCallback(chatId, messageId, dbUser._id, query.from.id);
-    } else if (data === "my_qr_codes") {
-      await handleMyQrCodesCallback(chatId, messageId, dbUser._id);
-    } else if (data === "my_reviews") {
-      await handleReviewsCallback(chatId, messageId, dbUser._id);
-    } else if (data === "dashboard_stats") {
-      await sendStatsForChat(chatId, messageId);
-    } else if (data === "ai_overview") {
-      await sendAiOverviewForChat(chatId, messageId);
-    } else if (data === "search_reviews") {
-      await handleSearchCallback(chatId, messageId, query.from.id);
-    } else if (data === "settings") {
-      await handleSettingsCallback(chatId, messageId, dbUser._id);
-    } else if (data.startsWith("set_channel_")) {
-      await handleSetChannelCallback(chatId, messageId, dbUser._id, data);
-    } else if (data.startsWith("qr_detail_")) {
-      await handleQrDetailCallback(
-        chatId,
-        messageId,
-        data.replace("qr_detail_", ""),
-      );
-    } else if (data.startsWith("copy_link_")) {
-      await handleCopyLinkCallback(
-        chatId,
-        data.replace("copy_link_", ""),
-      );
-    } else if (data.startsWith("review_detail_")) {
-      await handleReviewDetailCallback(
-        chatId,
-        messageId,
-        data.replace("review_detail_", ""),
-      );
-    }
-
+    await routeConnectedCallback(chatId, messageId, data, dbUser._id, query.from.id);
     await answerCallbackQuery(query.id);
   } catch (error) {
     console.error("[telegram:callback:error]", error);
@@ -967,213 +1308,189 @@ async function handleCallbackQuery(query: TelegramCallbackQuery) {
   }
 }
 
-/**
- * Fonctions de callback
- */
-async function handleMainMenu(
+async function routeConnectedCallback(
   chatId: number,
   messageId: number,
-  userId: Types.ObjectId,
-) {
-  if (!bot) return;
-
-  const keyboard = [
-    [{ text: "➕ Créer un QR code", callback_data: "create_qr" }],
-    [{ text: "📋 Mes QR codes", callback_data: "my_qr_codes" }],
-    [{ text: "⭐ Mes avis", callback_data: "my_reviews" }],
-    [{ text: "📊 Statistiques", callback_data: "dashboard_stats" }],
-    [{ text: "🤖 Analyse IA", callback_data: "ai_overview" }],
-    [{ text: "🔍 Rechercher", callback_data: "search_reviews" }],
-    [frontendButton("🌐 Ouvrir le dashboard", "/dashboard")],
-    [frontendButton("⚙️ Réglages web", "/settings")],
-    [{ text: "🔔 Notifications", callback_data: "settings" }],
-  ];
-
-  await editTelegramMessage(
-    String(chatId),
-    messageId,
-    "<b>📱 Menu principal</b>\n\nQue souhaitez-vous faire ?",
-    keyboard,
-  );
-}
-
-async function handleCreateQrCallback(
-  chatId: number,
-  messageId: number,
-  userId: Types.ObjectId,
-  telegramUserId?: number,
-) {
-  if (!bot) return;
-
-  // Marquer que l'utilisateur est en mode création de QR code
-  setUserContext(chatId, telegramUserId, "creating_qr");
-
-  const text = `<b>➕ Créer un QR code</b>\n\nTapez le nom de votre service ou produit.\n\nPar exemple: <code>Mon Restaurant</code>`;
-
-  await bot.sendMessage(chatId, text, { parse_mode: "HTML" });
-}
-
-async function handleMyQrCodesCallback(
-  chatId: number,
-  messageId: number,
-  userId: Types.ObjectId,
-) {
-  if (!bot) return;
-
-  const dbUser = await User.findById(userId).populate("company");
-  if (!dbUser) return;
-
-  const qrCodes = await CompanyQrCode.find({ company: dbUser.company }).limit(
-    10,
-  );
-
-  if (qrCodes.length === 0) {
-    await bot.sendMessage(chatId, "📭 Vous n'avez pas encore de QR code.");
-    return;
-  }
-
-  let text = "<b>📋 Mes QR codes</b>\n\n";
-  text += qrCodes
-    .map((qr, i) => `${i + 1}. <b>${qr.label || "QR Code"}</b>`)
-    .join("\n");
-
-  const keyboard = qrCodes.map((qr) => [
-    {
-      text: qr.label || "QR Code",
-      callback_data: `qr_detail_${qr._id}`,
-    },
-  ]);
-
-  await editTelegramMessage(String(chatId), messageId, text, keyboard);
-}
-
-async function handleReviewsCallback(
-  chatId: number,
-  messageId: number,
-  userId: Types.ObjectId,
-) {
-  if (!bot) return;
-
-  const dbUser = await User.findById(userId).populate("company");
-  if (!dbUser) return;
-
-  const reviews = await Review.find({ company: dbUser.company })
-    .populate("qrCode", "label slug")
-    .sort({ createdAt: -1 })
-    .limit(10);
-
-  if (reviews.length === 0) {
-    await bot.sendMessage(chatId, "📭 Vous n'avez pas d'avis.");
-    return;
-  }
-
-  let text = "<b>⭐ Mes avis</b>\n\n";
-  text += reviews.map((review, i) => formatReviewSummary(review, i)).join("\n\n");
-
-  await editTelegramMessage(String(chatId), messageId, text, [
-    [{ text: "🔙 Retour", callback_data: "main_menu" }],
-  ]);
-}
-
-async function handleSearchCallback(
-  chatId: number,
-  messageId: number,
-  telegramUserId?: number,
-) {
-  if (!bot) return;
-
-  setUserContext(chatId, telegramUserId, "search_reviews");
-  await bot.sendMessage(
-    chatId,
-    'Tapez votre recherche (ex: "qualité du service").',
-  );
-}
-
-async function handleSettingsCallback(
-  chatId: number,
-  messageId: number,
-  userId: Types.ObjectId,
-) {
-  if (!bot) return;
-
-  const dbUser = await User.findById(userId);
-  if (!dbUser) return;
-
-  const prefs = dbUser.notificationPreferences;
-  const preferredChannel = prefs?.preferredChannel || "email";
-
-  const text = `<b>⚙️ Vos paramètres</b>
-
-<b>Canal de notification préféré:</b>
-${preferredChannel === "email" ? "📧" : "  "} Email
-${preferredChannel === "telegram" ? "📱" : "  "} Telegram`;
-
-  const keyboard = [
-    [{ text: "📧 Définir Email", callback_data: "set_channel_email" }],
-    [{ text: "📱 Définir Telegram", callback_data: "set_channel_telegram" }],
-    [{ text: "🔙 Retour", callback_data: "main_menu" }],
-  ];
-
-  await editTelegramMessage(String(chatId), messageId, text, keyboard);
-}
-
-async function handleSetChannelCallback(
-  chatId: number,
-  messageId: number,
-  userId: Types.ObjectId,
   data: string,
+  userId: Types.ObjectId,
+  telegramUserId?: number,
 ) {
-  if (!bot) return;
+  if (data === "main_menu") return sendMainMenu(chatId, messageId);
+  if (data === "help") return sendHelp(chatId, messageId);
+  if (data === "create_qr") return startQrCreation(chatId, telegramUserId);
+  if (data === "my_qr_codes") return sendQrCodes(chatId, messageId);
+  if (data.startsWith("my_qr_codes_page_")) return sendQrCodes(chatId, messageId, Number(data.replace("my_qr_codes_page_", "")));
+  if (data === "my_reviews") return sendReviews(chatId, messageId);
+  if (data === "dashboard_stats") return sendStatsForChat(chatId, messageId);
+  if (data === "ai_overview") return sendAiOverviewForChat(chatId, messageId);
+  if (data === "search_reviews") return handleSearchCallback(chatId, telegramUserId);
+  if (data.startsWith("search_reviews_")) return handleSearchCallback(chatId, telegramUserId, getReviewFilterToken(data.replace("search_reviews_", "")));
+  if (data === "settings") return sendSettings(chatId, messageId);
+  if (data === "toggle_company_email") return toggleCompanyNotification(chatId, messageId, "email");
+  if (data === "toggle_company_telegram") return toggleCompanyNotification(chatId, messageId, "telegram");
 
-  const channel = data.replace("set_channel_", "") as
-    | "email"
-    | "whatsapp"
-    | "telegram";
+  if (data === "qr_email_yes" || data === "qr_email_no") {
+    return handleQrEmailChoice(chatId, telegramUserId, data === "qr_email_yes");
+  }
+  if (data === "qr_telegram_yes" || data === "qr_telegram_no") {
+    return handleQrTelegramChoice(chatId, telegramUserId, data === "qr_telegram_yes");
+  }
 
-  await User.findByIdAndUpdate(userId, {
-    "notificationPreferences.preferredChannel": channel,
+  if (data.startsWith("reviews_filters_")) {
+    const baseFilter = getReviewFilterToken(data.replace("reviews_filters_", ""));
+    const dbUser = await findUserByTelegram(chatId);
+    const filter = dbUser ? await hydrateReviewFilter(baseFilter, dbUser.company) : baseFilter;
+    await editTelegramMessage(
+      String(chatId),
+      messageId,
+      buildReviewFiltersText(filter),
+      reviewFiltersKeyboard(filter),
+    );
+    return;
+  }
+  if (data.startsWith("reviews_page_")) {
+    return sendReviews(chatId, messageId, getReviewFilterToken(data.replace("reviews_page_", "")));
+  }
+  if (data.startsWith('reviews_export_')) return exportReviewsForChat(chatId, getReviewFilterToken(data.replace('reviews_export_', '')));
+  const ratingMatch = data.match(/^reviews_rating_([1-5])_(.+)$/);
+  if (ratingMatch) {
+    const filter = resetReviewFilterPage(getReviewFilterToken(ratingMatch[2] || ""));
+    return sendReviews(chatId, messageId, { ...filter, rating: Number(ratingMatch[1]) as 1 | 2 | 3 | 4 | 5 });
+  }
+  if (data.startsWith("reviews_rating_")) {
+    const filter = getReviewFilterToken(data.replace("reviews_rating_", ""));
+    await editTelegramMessage(String(chatId), messageId, "<b>Score</b>\n\nChoisissez une note.", reviewRatingKeyboard(filter));
+    return;
+  }
+  const sentimentMatch = data.match(/^reviews_sentiment_(positive|neutral|negative)_(.+)$/);
+  if (sentimentMatch) {
+    const filter = resetReviewFilterPage(getReviewFilterToken(sentimentMatch[2] || ""));
+    return sendReviews(chatId, messageId, { ...filter, sentiment: sentimentMatch[1] as ReviewFilter["sentiment"] });
+  }
+  if (data.startsWith("reviews_sentiment_")) {
+    const filter = getReviewFilterToken(data.replace("reviews_sentiment_", ""));
+    await editTelegramMessage(String(chatId), messageId, "<b>Sentiment</b>\n\nChoisissez le ressenti client.", reviewSentimentKeyboard(filter));
+    return;
+  }
+  const statusMatch = data.match(/^reviews_status_(published|archived)_(.+)$/);
+  if (statusMatch) {
+    const filter = resetReviewFilterPage(getReviewFilterToken(statusMatch[2] || ""));
+    return sendReviews(chatId, messageId, { ...filter, moderationStatus: statusMatch[1] as ReviewFilter["moderationStatus"] });
+  }
+  if (data.startsWith("reviews_status_")) {
+    const filter = getReviewFilterToken(data.replace("reviews_status_", ""));
+    await editTelegramMessage(String(chatId), messageId, "<b>Statut</b>\n\nChoisissez le statut.", reviewStatusKeyboard(filter));
+    return;
+  }
+  if (data.startsWith("reviews_by_qr_")) return sendReviewQrFilter(chatId, messageId, getReviewFilterToken(data.replace("reviews_by_qr_", "")));
+  if (data.startsWith("reviews_by_tag_")) return sendReviewTagFilter(chatId, messageId, getReviewFilterToken(data.replace("reviews_by_tag_", "")));
+  if (data.startsWith("reviews_search_tag_")) return askReviewTagSearch(chatId, telegramUserId, getReviewFilterToken(data.replace("reviews_search_tag_", "")));
+  if (data.startsWith("reviews_tag_")) {
+    const [, tagToken, filterToken] = data.match(/^reviews_tag_([^_]+)_(.+)$/) || [];
+    const tag = reviewTagTokens.get(tagToken || "");
+    if (!tag) {
+      await sendReviewTagFilter(chatId, messageId, getReviewFilterToken(filterToken || ""));
+      return;
+    }
+    return sendReviews(chatId, messageId, { ...resetReviewFilterPage(getReviewFilterToken(filterToken || "")), tag });
+  }
+  if (data.startsWith("reviews_qr_")) {
+    return sendReviews(chatId, messageId, getReviewFilterToken(data.replace("reviews_qr_", "")));
+  }
+
+  if (data.startsWith("qr_detail_")) return handleQrDetailCallback(chatId, messageId, data.replace("qr_detail_", ""));
+  if (data.startsWith("qr_download_png_")) return handleQrDownload(chatId, data.replace("qr_download_png_", ""), "png");
+  if (data.startsWith("qr_download_pdf_")) return handleQrDownload(chatId, data.replace("qr_download_pdf_", ""), "pdf");
+  if (data.startsWith("qr_toggle_email_")) return toggleQrNotification(chatId, messageId, data.replace("qr_toggle_email_", ""), "email");
+  if (data.startsWith("qr_toggle_telegram_")) return toggleQrNotification(chatId, messageId, data.replace("qr_toggle_telegram_", ""), "telegram");
+  if (data.startsWith("qr_reviews_")) return sendReviews(chatId, messageId, { qrCodeId: data.replace("qr_reviews_", "") });
+  if (data.startsWith("qr_ai_")) {
+    const qrAction = getQrActionToken(data.replace("qr_ai_", ""));
+    return sendAiOverviewForChat(chatId, messageId, qrAction.qrCodeId, qrAction.qrCodeLabel);
+  }
+  if (data.startsWith("copy_link_")) return handleCopyLinkCallback(chatId, data.replace("copy_link_", ""));
+
+  if (data.startsWith("review_detail_")) return handleReviewDetailCallback(chatId, messageId, data.replace("review_detail_", ""));
+  if (data.startsWith("review_archive_")) return updateReviewModeration(chatId, messageId, data.replace("review_archive_", ""), "archived");
+  if (data.startsWith("review_tag_")) return askReviewTag(chatId, telegramUserId, data.replace("review_tag_", ""));
+  if (data.startsWith("review_reply_")) return askReviewReply(chatId, telegramUserId, data.replace("review_reply_", ""));
+}
+
+async function handleQrEmailChoice(chatId: number, telegramUserId: number | undefined, enabled: boolean) {
+  const context = getUserContext(chatId, telegramUserId);
+  if (!context?.qrName) {
+    await startQrCreation(chatId, telegramUserId);
+    return;
+  }
+
+  setUserContext(chatId, telegramUserId, "creating_qr_name", {
+    qrName: context.qrName,
+    emailEnabled: enabled,
   });
-
-  await bot.sendMessage(
-    chatId,
-    `✅ Canal de notification changé en ${channel}`,
+  await sendTelegramKeyboard(
+    String(chatId),
+    `<b>Creer un QR</b>\n\n3/3 - Activer Telegram pour <b>${escapeHtml(context.qrName)}</b> ?`,
+    [
+      [
+        { text: "Oui", callback_data: "qr_telegram_yes" },
+        { text: "Non", callback_data: "qr_telegram_no" },
+      ],
+      [{ text: "Retour", callback_data: "create_qr" }],
+      [{ text: "Menu principal", callback_data: "main_menu" }],
+    ],
   );
-  await handleSettingsCallback(chatId, messageId, userId);
 }
 
-/**
- * Callback pour les guests voulant créer un QR code
- */
-async function handleGuestCreateQrCallback(
+async function handleQrTelegramChoice(
+  chatId: number,
+  telegramUserId: number | undefined,
+  enabled: boolean,
+) {
+  const context = getUserContext(chatId, telegramUserId);
+  if (!context?.qrName) {
+    await startQrCreation(chatId, telegramUserId);
+    return;
+  }
+
+  clearUserContext(chatId, telegramUserId);
+  await createConnectedQr(chatId, context.qrName, context.emailEnabled !== false, enabled);
+}
+
+async function handleSearchCallback(chatId: number, telegramUserId?: number, filter: ReviewFilter = {}) {
+  const token = createReviewFilterToken(filter);
+  setUserContext(chatId, telegramUserId, "search_reviews", { qrName: token });
+  await sendTelegramKeyboard(
+    String(chatId),
+    'Tapez votre recherche, par exemple "qualite du service".',
+    navigationKeyboard(`reviews_filters_${token}`),
+  );
+}
+
+async function toggleCompanyNotification(
   chatId: number,
   messageId: number,
-  telegramUserId?: number,
+  channel: "email" | "telegram",
 ) {
   if (!bot) return;
 
-  const text = `<b>➕ Créer un QR code</b>\n\nVeuillez créer votre QR code depuis le site avec votre email et le nom de votre entreprise.\n\nAprès connexion, vous pourrez lier Telegram dans les paramètres pour recevoir les notifications instantanées.`;
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
 
-  await sendTelegramKeyboard(String(chatId), text, [
-    [frontendButton("Créer mon QR code")],
-    [frontendButton("Se connecter", "/login?redirect=/settings")],
-  ]);
+  const key = channel === "telegram" ? "telegramEnabled" : "emailEnabled";
+  const current = context.company.notificationPreferences?.[key] !== false;
+  context.company.set(`notificationPreferences.${key}`, !current);
+  await context.company.save();
+
+  await bot.sendMessage(chatId, `${channel === "telegram" ? "Telegram" : "Email"} ${!current ? "active" : "desactive"}.`);
+  await sendSettings(chatId, messageId);
 }
 
-/**
- * Callback pour la connexion Telegram
- */
-async function handleConnectTelegramCallback(
-  chatId: number,
-  messageId: number,
-  data: string,
-) {
-  if (!bot) return;
-
-  const text = `<b>🌐 Se connecter à QrFeedback</b>\n\nConnectez-vous puis ouvrez Paramètres → Notifications pour lier Telegram.`;
-
-  await sendTelegramKeyboard(String(chatId), text, [
-    [frontendButton("Se connecter", "/login?redirect=/settings")],
-  ]);
+async function handleConnectTelegramCallback(chatId: number) {
+  await sendTelegramKeyboard(
+    String(chatId),
+    "<b>Se connecter a QrFeedback</b>\n\nConnectez-vous puis ouvrez Parametres > Notifications pour lier Telegram.",
+    [[frontendButton("Se connecter", "/login?redirect=/settings")]],
+  );
 }
 
 async function handleQrDetailCallback(
@@ -1183,28 +1500,135 @@ async function handleQrDetailCallback(
 ) {
   if (!bot) return;
 
-  const qr = await CompanyQrCode.findById(qrId);
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const qr = await CompanyQrCode.findOne({ _id: qrId, company: context.company._id });
   if (!qr) {
-    await bot.sendMessage(chatId, "❌ QR code introuvable.");
+    await bot.sendMessage(chatId, "QR code introuvable.");
     return;
   }
 
-  const reviewCount = await Review.countDocuments({ qrCode: qr._id });
+  const reviewCount = await Review.countDocuments({ qrCode: qr._id, moderationStatus: { $ne: "archived" } });
+  const scanCount = qr.scanCount || 0;
+  const conversion = scanCount ? (Math.min(reviewCount, scanCount) / scanCount) * 100 : 0;
+  const prefs = qr.notificationPreferences;
+  const qrAiToken = createQrActionToken(qr._id, qr.label || qr.slug || "QR Code");
+  const text = `<b>${escapeHtml(qr.label || "QR Code")}</b>
 
-  const text = `<b>${qr.label || "QR Code"}</b>\n\nAvis: ${reviewCount}\nLien: <code>${qr.feedbackUrl}</code>`;
+Statut: <b>${qr.isActive ? "Actif" : "Inactif"}</b>
+Avis: <b>${reviewCount}</b>
+Scans: <b>${scanCount}</b>
+Conversion scan vers avis: <b>${formatPercent(conversion)}</b>
+Repere: <b>10% a 30%</b> est generalement sain.
+Email: <b>${prefs?.emailEnabled !== false ? "active" : "desactive"}</b>
+Telegram: <b>${prefs?.telegramEnabled !== false ? "active" : "desactive"}</b>
+
+Lien:
+<code>${qr.feedbackUrl}</code>`;
 
   await editTelegramMessage(String(chatId), messageId, text, [
-    [{ text: "📋 Copier le lien", callback_data: `copy_link_${qrId}` }],
-    [{ text: "🔙 Retour", callback_data: "my_qr_codes" }],
+    [
+      { text: "PNG", callback_data: `qr_download_png_${qrId}` },
+      { text: "PDF", callback_data: `qr_download_pdf_${qrId}` },
+    ],
+    [
+      { text: `${prefs?.emailEnabled !== false ? "Desactiver" : "Activer"} Email`, callback_data: `qr_toggle_email_${qrId}` },
+      { text: `${prefs?.telegramEnabled !== false ? "Desactiver" : "Activer"} Telegram`, callback_data: `qr_toggle_telegram_${qrId}` },
+    ],
+    [{ text: "Mes avis", callback_data: `qr_reviews_${qrId}` }],
+    [{ text: "Analyse IA", callback_data: `qr_ai_${qrAiToken}` }],
+    [{ text: "Copier le lien", callback_data: `copy_link_${qrId}` }],
+    ...navigationKeyboard("my_qr_codes"),
   ]);
+}
+
+async function handleQrDownload(chatId: number, qrId: string, format: "png" | "pdf") {
+  if (!bot) return;
+
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const qr = await CompanyQrCode.findOne({ _id: qrId, company: context.company._id });
+  if (!qr) {
+    await bot.sendMessage(chatId, "QR code introuvable.");
+    return;
+  }
+
+  if (format === "png") {
+    const qrImageBase64 = qr.qrCodeDataUrl.split(",")[1] || qr.qrCodeDataUrl;
+    await bot.sendPhoto(chatId, Buffer.from(qrImageBase64, "base64"), {
+      caption: `<b>${escapeHtml(qr.label || "QR Code")}</b>\n<code>${qr.feedbackUrl}</code>`,
+      parse_mode: "HTML",
+    });
+    await sendQrFollowUpKeyboard(chatId, qrId, qr.label || qr.slug || "QR Code");
+    return;
+  }
+
+  const pdf = await buildQrPdfBuffer({
+    companyName: context.company.name,
+    feedbackUrl: qr.feedbackUrl,
+    qrCodeDataUrl: qr.qrCodeDataUrl,
+  });
+  await bot.sendDocument(
+    chatId,
+    pdf,
+    { caption: "PDF imprimable" },
+    {
+      filename: `${createSlug(qr.label || "qr-code") || "qr-code"}.pdf`,
+      contentType: "application/pdf",
+    },
+  );
+  await sendQrFollowUpKeyboard(chatId, qrId, qr.label || qr.slug || "QR Code");
+}
+
+async function sendQrFollowUpKeyboard(chatId: number, qrId: string, qrLabel = "QR Code") {
+  const qrAiToken = createQrActionToken(qrId, qrLabel);
+  await sendTelegramKeyboard(
+    String(chatId),
+    "Que voulez-vous voir pour ce QR ?",
+    navigationKeyboard(`qr_detail_${qrId}`, [
+      [{ text: "Mes avis", callback_data: `qr_reviews_${qrId}` }],
+      [{ text: "Analyse IA", callback_data: `qr_ai_${qrAiToken}` }],
+    ]),
+  );
+}
+
+async function toggleQrNotification(
+  chatId: number,
+  messageId: number,
+  qrId: string,
+  channel: "email" | "telegram",
+) {
+  if (!bot) return;
+
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const qr = await CompanyQrCode.findOne({ _id: qrId, company: context.company._id });
+  if (!qr) {
+    await bot.sendMessage(chatId, "QR code introuvable.");
+    return;
+  }
+
+  const key = channel === "telegram" ? "telegramEnabled" : "emailEnabled";
+  const current = qr.notificationPreferences?.[key] !== false;
+  qr.set(`notificationPreferences.${key}`, !current);
+  await qr.save();
+
+  await bot.sendMessage(chatId, `${channel === "telegram" ? "Telegram" : "Email"} ${!current ? "active" : "desactive"} pour ce QR.`);
+  await handleQrDetailCallback(chatId, messageId, qrId);
 }
 
 async function handleCopyLinkCallback(chatId: number, qrId: string) {
   if (!bot) return;
 
-  const qr = await CompanyQrCode.findById(qrId);
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const qr = await CompanyQrCode.findOne({ _id: qrId, company: context.company._id });
   if (!qr) {
-    await bot.sendMessage(chatId, "❌ QR code introuvable.");
+    await bot.sendMessage(chatId, "QR code introuvable.");
     return;
   }
 
@@ -1220,111 +1644,183 @@ async function handleReviewDetailCallback(
 ) {
   if (!bot) return;
 
-  const review = await Review.findById(reviewId).populate(
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const review = await Review.findOne({ _id: reviewId, company: context.company._id }).populate(
     "qrCode",
     "label slug feedbackUrl",
   );
   if (!review) {
-    await bot.sendMessage(chatId, "❌ Avis introuvable.");
+    await bot.sendMessage(chatId, "Avis introuvable.");
     return;
   }
 
-  let text = `<b>Avis détaillé</b>\n\n`;
+  let text = `<b>Avis detaille</b>\n\n`;
   text += `QR: <b>${escapeHtml(getReviewQrLabel(review))}</b>\n`;
-  text += `Note: <b>${review.rating}/5</b>\n`;
+  text += `Score: <b>${review.rating}/5</b>\n`;
+  text += `Statut: <b>${formatModerationStatus(review.moderationStatus)}</b>\n`;
   text += `Date: ${formatReviewDate(review.createdAt)}\n`;
-  if (review.serviceFeedback) {
-    text += `Commentaire: ${escapeHtml(review.serviceFeedback)}\n`;
-  }
+  if (review.tags?.length) text += `Tags: ${review.tags.map(escapeHtml).join(", ")}\n`;
+  if (review.serviceFeedback) text += `Commentaire: ${escapeHtml(review.serviceFeedback)}\n`;
+  if (review.internalNote) text += `Note interne: ${escapeHtml(review.internalNote)}\n`;
+  if (review.responseText) text += `Ancienne note: ${escapeHtml(review.responseText)}\n`;
 
   const answers = formatReviewExtraAnswers(review, 10);
-  if (answers) {
-    text += `\n<b>Reponses:</b>\n${answers}`;
-  }
+  if (answers) text += `\n<b>Reponses du formulaire:</b>\n${answers}`;
 
-  await editTelegramMessage(String(chatId), messageId, text, [
-    [{ text: "🔙 Retour", callback_data: "my_reviews" }],
-  ]);
+  await editTelegramMessage(String(chatId), messageId, text, reviewActionKeyboard(reviewId));
 }
 
-async function handleCreateQrFromMessage(msg: TelegramMessage) {
+async function updateReviewModeration(
+  chatId: number,
+  messageId: number,
+  reviewId: string,
+  status: "archived",
+) {
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  await Review.findOneAndUpdate({ _id: reviewId, company: context.company._id }, { moderationStatus: status });
+  await handleReviewDetailCallback(chatId, messageId, reviewId);
+}
+
+async function askReviewTag(chatId: number, telegramUserId: number | undefined, reviewId: string) {
+  setUserContext(chatId, telegramUserId, "review_add_tag", { reviewId });
+  await sendTelegramKeyboard(
+    String(chatId),
+    "Tapez un ou plusieurs tags separes par des virgules.",
+    navigationKeyboard(`review_detail_${reviewId}`),
+  );
+}
+
+async function addReviewTags(
+  chatId: number,
+  telegramUserId: number | undefined,
+  reviewId: string | undefined,
+  text: string,
+) {
+  if (!bot || !reviewId) return;
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const tags = text
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+
+  if (!tags.length) {
+    await bot.sendMessage(chatId, "Aucun tag valide.");
+    return;
+  }
+
+  await Review.findOneAndUpdate(
+    { _id: reviewId, company: context.company._id },
+    { $addToSet: { tags: { $each: tags } } },
+  );
+  clearUserContext(chatId, telegramUserId);
+  await bot.sendMessage(chatId, "Tags ajoutes.");
+  await sendReviews(chatId);
+}
+
+async function askReviewReply(chatId: number, telegramUserId: number | undefined, reviewId: string) {
+  setUserContext(chatId, telegramUserId, "review_reply", { reviewId });
+  await sendTelegramKeyboard(
+    String(chatId),
+    "Tapez la note interne a enregistrer pour cet avis.",
+    navigationKeyboard(`review_detail_${reviewId}`),
+  );
+}
+
+async function replyToReview(
+  chatId: number,
+  telegramUserId: number | undefined,
+  reviewId: string | undefined,
+  text: string,
+) {
+  if (!bot || !reviewId) return;
+  const context = await findTelegramUserCompany(chatId);
+  if (!context) return;
+
+  const internalNote = text.trim();
+  if (internalNote.length < 2) {
+    await bot.sendMessage(chatId, "Tapez une note plus complete.");
+    return;
+  }
+
+  await Review.findOneAndUpdate(
+    { _id: reviewId, company: context.company._id },
+    { internalNote },
+  );
+  clearUserContext(chatId, telegramUserId);
+  await bot.sendMessage(chatId, "Note interne enregistree.");
+  await sendReviews(chatId);
+}
+
+async function createConnectedQr(
+  chatId: number,
+  qrName: string,
+  emailEnabled: boolean,
+  telegramEnabled: boolean,
+) {
   if (!bot) return;
 
-  const chatId = msg.chat.id;
-  const qrName =
-    msg.text?.replace(/^(qr|\/qr)\s+/i, "").trim() || "Mon QR Code";
-
   try {
-    // Chercher l'utilisateur (s'il est connecté)
-    let dbUser = await findUserByTelegram(chatId);
-    let company: any = null;
-
-    if (!dbUser) {
-      setUserContext(chatId, msg.from?.id, "guest_create_email", { qrName });
-      await bot.sendMessage(
-        chatId,
-        `Pour creer le QR code "${qrName}", tapez votre adresse email.`,
-      );
+    const context = await findTelegramUserCompany(chatId);
+    if (!context) {
+      setUserContext(chatId, undefined, "guest_create_email", { qrName });
+      await bot.sendMessage(chatId, `Pour creer le QR code "${escapeHtml(qrName)}", tapez votre adresse email.`);
       return;
     }
 
-    if (!dbUser) {
-      await sendTelegramKeyboard(
-        String(chatId),
-        "Pour créer un QR code sans compte connecté, utilisez le site avec votre email et le nom de votre entreprise.",
-        [[frontendButton("Créer mon QR code")]],
-      );
-      return;
-    }
-
-    if (dbUser && dbUser.company) {
-      company = await Company.findById(dbUser.company);
-    }
-
-    if (!company) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Erreur: impossible de créer le QR code.",
-      );
-      return;
-    }
-
-    // Créer le QR code
-    const slug = createSlug(`${company.name}-${qrName}-${chatId}`);
+    const slug = await createUniqueSlug(`${context.company.name}-${qrName}-${chatId}`);
     const feedbackUrl = `${env.frontendUrl}/avis/${slug}`;
     const qrCodeDataUrl = await generateQrDataUrl(feedbackUrl);
-    const qrCode = new CompanyQrCode({
+    const qrCode = await CompanyQrCode.create({
       label: qrName,
-      company: company._id,
+      company: context.company._id,
       slug,
       feedbackUrl,
       qrCodeDataUrl,
+      notificationPreferences: {
+        emailEnabled,
+        telegramEnabled,
+      },
     });
 
-    await qrCode.save();
+    await sendQrAssets(
+      chatId,
+      context.company.name,
+      qrCode,
+      `QR code cree: <b>${escapeHtml(qrName)}</b>
 
-    const qrImageBase64 = qrCodeDataUrl.split(",")[1] || qrCodeDataUrl;
+Email: <b>${emailEnabled ? "active" : "desactive"}</b>
+Telegram: <b>${telegramEnabled ? "active" : "desactive"}</b>
 
-    await bot?.sendPhoto(chatId, Buffer.from(qrImageBase64, "base64"), {
-      caption: `✅ QR code créé: <b>${qrName}</b>\n\n📱 Lien de feedback:\n<code>${qrCode.feedbackUrl}</code>`,
-      parse_mode: "HTML",
-    });
+Lien:
+<code>${qrCode.feedbackUrl}</code>`,
+    );
+
+    await sendTelegramKeyboard(
+      String(chatId),
+      "QR pret. Vous pouvez aussi le retrouver dans Mes QR codes.",
+      navigationKeyboard("my_qr_codes", [
+        [{ text: "Mes avis", callback_data: `qr_reviews_${qrCode._id}` }],
+        [{ text: "Analyse IA", callback_data: `qr_ai_${createQrActionToken(qrCode._id, qrCode.label || qrCode.slug || "QR Code")}` }],
+        [{ text: "Creer un autre QR", callback_data: "create_qr" }],
+        [frontendButton("Ouvrir le dashboard", "/dashboard/qr-codes")],
+      ]),
+    );
   } catch (error) {
     console.error("[telegram:create_qr:error]", error);
-    await bot?.sendMessage(chatId, "❌ Erreur lors de la création du QR code.");
+    await bot.sendMessage(chatId, "Erreur lors de la creation du QR code.");
   }
 }
 
-/**
- * Utilitaire pour trouver un utilisateur par Telegram
- */
 async function findUserByTelegram(chatId: number) {
   return User.findOne({ "telegramProfile.chatId": String(chatId) });
 }
 
-/**
- * Connecter un utilisateur existant avec Telegram
- */
 export async function connectUserToTelegram(
   userId: Types.ObjectId,
   chatId: number,
@@ -1347,10 +1843,10 @@ export async function connectUserToTelegram(
   );
 
   if (bot) {
-    await bot.sendMessage(
-      chatId,
-      `✅ Connecté en tant que <b>${user?.email}</b>\n\nVotre compte est maintenant lié à Telegram!`,
-      { parse_mode: "HTML" },
+    await sendTelegramKeyboard(
+      String(chatId),
+      `Connecte en tant que <b>${escapeHtml(user?.email)}</b>\n\nVotre compte est maintenant lie a Telegram.`,
+      mainMenuKeyboard(),
     );
   }
 

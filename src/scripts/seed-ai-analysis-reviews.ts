@@ -8,7 +8,6 @@ import { generateQrDataUrl } from '../services/qr.service.js';
 import { reindexCompanyReviews } from '../services/typesense.service.js';
 import { createSlug } from '../utils/slug.js';
 
-const TARGET_WHATSAPP = '+22999997478';
 const SEED_BATCH = 'ai-analysis-demo-1000';
 const REVIEW_COUNT = 1000;
 
@@ -116,10 +115,6 @@ const topics: Topic[] = [
 const names = ['Karel', 'Aminata', 'Joel', 'Fatou', 'Serge', 'Mireille', 'Cedric', 'Nadia', 'Aurelien', 'Grace', 'Moussa', 'Chloe'];
 const emailDomains = ['gmail.com', 'yahoo.fr', 'outlook.com', 'example.com'];
 
-function digitsOnly(value: string) {
-  return value.replace(/\D/g, '');
-}
-
 function ratingForTopic(topic: Topic, index: number) {
   if (topic.impact === 'positive') return [4, 5, 5, 4, 5][index % 5];
   if (topic.impact === 'negative') return [1, 2, 2, 3, 1][index % 5];
@@ -163,40 +158,27 @@ function buildCustomAnswers(index: number) {
   ];
 }
 
-async function findQrCodeByPhone() {
-  const targetDigits = digitsOnly(TARGET_WHATSAPP);
-  const qrCodes = await CompanyQrCode.find({}).populate('company');
-  return qrCodes.find((qrCode) => digitsOnly(qrCode.whatsappNumber || '') === targetDigits) || null;
-}
-
 async function findOrCreateQrCode() {
-  const existingQrCode = await findQrCodeByPhone();
+  const existingQrCode = await CompanyQrCode.findOne({ label: 'Avis clients - Seed IA' }).sort({ createdAt: 1 });
   if (existingQrCode) return existingQrCode;
 
-  const company = await Company.findOne({
-    slug: { $ne: 'qr-feedback-admin' },
-    $or: [
-      { whatsappNumber: TARGET_WHATSAPP },
-      { whatsappNumber: digitsOnly(TARGET_WHATSAPP) }
-    ]
-  }) || await Company.findOne({ slug: { $ne: 'qr-feedback-admin' } }).sort({ createdAt: 1 });
+  const company = await Company.findOne({ slug: { $ne: 'qr-feedback-admin' } }).sort({ createdAt: 1 });
 
   if (!company) {
     throw new Error('Aucune entreprise utilisateur trouvee. Creez un compte entreprise avant de lancer ce seeder.');
   }
 
-  const slug = createSlug(`${company.name}-${TARGET_WHATSAPP}`);
+  const slug = createSlug(`${company.name}-seed-ai`);
   const feedbackUrl = `${env.frontendUrl}/avis/${slug}`;
   const qrCodeDataUrl = await generateQrDataUrl(feedbackUrl);
 
   return CompanyQrCode.create({
     company: company._id,
-    whatsappNumber: TARGET_WHATSAPP,
     slug,
     feedbackUrl,
     qrCodeDataUrl,
     label: 'Avis clients - Seed IA',
-    notificationPreferences: { whatsappEnabled: false, emailEnabled: false }
+    notificationPreferences: { emailEnabled: false, telegramEnabled: false }
   });
 }
 
@@ -240,8 +222,7 @@ const reviews = Array.from({ length: REVIEW_COUNT - existingSeedCount }, (_, ind
     customAnswers: buildCustomAnswers(absoluteIndex),
     rating: ratingForTopic(topic, absoluteIndex),
     notificationStatus: 'skipped',
-    notificationError: 'Seeder: aucune notification WhatsApp envoyee.',
-    notificationWhatsappNumber: qrCode.whatsappNumber,
+    notificationError: 'Seeder: aucune notification temps reel envoyee.',
     emailNotificationStatus: 'skipped',
     emailNotificationError: 'Seeder: aucune notification email envoyee.',
     notificationEmail: company.email,
@@ -261,7 +242,6 @@ if (!shouldSkipIndex) {
 console.log(`Seeder termine: ${reviews.length} avis ajoutes.`);
 console.log(`Entreprise: ${company.name} (${company._id})`);
 console.log(`QR code: ${qrCode.label || qrCode.slug} (${qrCode._id})`);
-console.log(`Numero WhatsApp: ${qrCode.whatsappNumber}`);
 console.log('Notifications: aucun envoi effectue, statuts marques skipped.');
 
 await mongoose.disconnect();

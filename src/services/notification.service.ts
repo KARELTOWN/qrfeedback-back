@@ -3,11 +3,11 @@ import type { IUser } from "../models/User.js";
 import type { ICompany } from "../models/Company.js";
 import type { ICompanyQrCode } from "../models/CompanyQrCode.js";
 import type { IReview } from "../models/Review.js";
-import { sendWhatsapp } from "./whatsapp.service.js";
 import { sendMail } from "./mail.service.js";
 import { sendTelegram } from "./telegram.service.js";
+import { env } from "../config/env.js";
 
-export type NotificationChannelType = "email" | "whatsapp" | "telegram";
+export type NotificationChannelType = "email" | "telegram";
 
 type SendReviewNotificationInput = {
   user: HydratedDocument<IUser>;
@@ -24,35 +24,6 @@ type NotificationStatus = {
   messageId?: string;
 };
 
-/**
- * Récupère le canal de notification préféré de l'utilisateur
- */
-export function getPreferredChannel(
-  user: HydratedDocument<IUser>,
-): NotificationChannelType {
-  const prefs = user.notificationPreferences;
-
-  if (prefs?.preferredChannel === "whatsapp") {
-    return "email";
-  }
-
-  // Si un canal préféré est défini et activé, l'utiliser
-  if (prefs?.preferredChannel && prefs.channels?.[prefs.preferredChannel]) {
-    return prefs.preferredChannel;
-  }
-
-  // Sinon, chercher le premier canal activé
-  const activeChannels = Object.entries(prefs?.channels || {})
-    .filter(([channel]) => channel !== "whatsapp")
-    .filter(([_, enabled]) => enabled)
-    .map(([channel]) => channel as NotificationChannelType);
-
-  return activeChannels[0] || "email";
-}
-
-/**
- * Envoie une notification d'avis sur le canal préféré
- */
 export async function sendReviewNotification({
   user,
   company,
@@ -60,57 +31,42 @@ export async function sendReviewNotification({
   qrCode,
   channel,
 }: SendReviewNotificationInput): Promise<NotificationStatus> {
-  const targetChannel = channel === "whatsapp" ? "email" : channel || getPreferredChannel(user);
+  const targetChannel = channel || "email";
   const isEnabled = user.notificationPreferences?.channels?.[targetChannel];
 
   if (!isEnabled) {
     return {
       channel: targetChannel,
       status: "skipped",
-      error: `Canal ${targetChannel} désactivé`,
+      error: `Canal ${targetChannel} desactive`,
     };
   }
 
   try {
-    switch (targetChannel) {
-      case "email":
-        return await sendEmailReviewNotification(user, company, review);
-      case "whatsapp":
-        return await sendWhatsappReviewNotification(user, company, review);
-      case "telegram":
-        return await sendTelegramReviewNotification(user, company, review, qrCode);
-      default:
-        return {
-          channel: targetChannel,
-          status: "skipped",
-          error: `Canal ${targetChannel} non reconnu`,
-        };
+    if (targetChannel === "telegram") {
+      return await sendTelegramReviewNotification(user, company, review, qrCode);
     }
+
+    return await sendEmailReviewNotification(user, company, review);
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Erreur inconnue";
     return {
       channel: targetChannel,
       status: "failed",
-      error: errorMessage,
+      error: error instanceof Error ? error.message : "Erreur inconnue",
     };
   }
 }
 
-/**
- * Envoie une notification sur tous les canaux activés
- */
 export async function broadcastReviewNotification({
   user,
   company,
   review,
-}: Omit<SendReviewNotificationInput, "channel">): Promise<
-  NotificationStatus[]
-> {
+  qrCode,
+}: Omit<SendReviewNotificationInput, "channel">): Promise<NotificationStatus[]> {
   const channels: NotificationChannelType[] = ["email", "telegram"];
   const results = await Promise.all(
     channels.map((channel) =>
-      sendReviewNotification({ user, company, review, channel }).catch(
+      sendReviewNotification({ user, company, review, qrCode, channel }).catch(
         (error) => ({
           channel,
           status: "failed" as const,
@@ -127,48 +83,15 @@ async function sendEmailReviewNotification(
   company: HydratedDocument<ICompany>,
   review: HydratedDocument<IReview>,
 ): Promise<NotificationStatus> {
-  const html = buildReviewEmailHtml(company, review);
-
   await sendMail({
     to: user.email,
     subject: `Nouvel avis pour ${company.name}`,
-    html,
+    html: buildReviewEmailHtml(company, review),
   });
 
   return {
     channel: "email",
     status: "sent",
-  };
-}
-
-async function sendWhatsappReviewNotification(
-  user: HydratedDocument<IUser>,
-  company: HydratedDocument<ICompany>,
-  review: HydratedDocument<IReview>,
-): Promise<NotificationStatus> {
-  // Pour WhatsApp, on a besoin du numéro de téléphone
-  // Cette partie dépend de votre implémentation existante
-  // Vous devez avoir un champ phoneNumber ou similar dans User
-
-  const phoneNumber = (user as any).phoneNumber;
-  if (!phoneNumber) {
-    return {
-      channel: "whatsapp",
-      status: "skipped",
-      error: "Numéro de téléphone non configuré",
-    };
-  }
-
-  const message = buildReviewMessage(company, review);
-  const result = await sendWhatsapp({
-    to: phoneNumber,
-    body: message,
-  });
-
-  return {
-    channel: "whatsapp",
-    status: "sent",
-    messageId: result.id,
   };
 }
 
@@ -184,14 +107,14 @@ async function sendTelegramReviewNotification(
     return {
       channel: "telegram",
       status: "skipped",
-      error: "Chat Telegram non configuré",
+      error: "Chat Telegram non configure",
     };
   }
 
-  const message = buildReviewTelegramMessage(company, review, qrCode);
   const result = await sendTelegram({
     chatId,
-    message,
+    message: buildReviewTelegramMessage(company, review, qrCode),
+    keyboard: buildReviewTelegramKeyboard(review),
   });
 
   return {
@@ -201,9 +124,6 @@ async function sendTelegramReviewNotification(
   };
 }
 
-/**
- * Envoie une notification Telegram à un guest (utilisateur sans compte)
- */
 export async function sendGuestReviewNotification(
   company: HydratedDocument<ICompany>,
   review: HydratedDocument<IReview>,
@@ -214,14 +134,14 @@ export async function sendGuestReviewNotification(
     return {
       channel: "telegram",
       status: "skipped",
-      error: "Chat Telegram guest non configuré",
+      error: "Chat Telegram guest non configure",
     };
   }
 
-  const message = buildReviewTelegramMessage(company, review);
   const result = await sendTelegram({
     chatId,
-    message,
+    message: buildReviewTelegramMessage(company, review),
+    keyboard: buildReviewTelegramKeyboard(review),
   });
 
   return {
@@ -231,28 +151,37 @@ export async function sendGuestReviewNotification(
   };
 }
 
-function buildReviewMessage(
-  company: HydratedDocument<ICompany>,
+function buildReviewTelegramKeyboard(
   review: HydratedDocument<IReview>,
-): string {
-  const lines = [
-    `Nouvel avis pour ${company.name}`,
-    `Note: ${review.rating}/5`,
+): Array<Array<{ text: string; callback_data?: string; url?: string }>> {
+  const reviewId = String(review._id);
+  const dashboardUrl = `${env.frontendUrl.replace(/\/$/, "")}/dashboard/reviews`;
+  const keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> = [
+    [
+      { text: "Voir details", callback_data: `review_detail_${reviewId}` },
+      { text: "Archiver", callback_data: `review_archive_${reviewId}` },
+    ],
+    [
+      { text: "Ajouter une note", callback_data: `review_reply_${reviewId}` },
+      { text: "Ajouter un tag", callback_data: `review_tag_${reviewId}` },
+    ],
+    [{ text: "Retour", callback_data: "my_reviews" }],
+    [{ text: "Menu principal", callback_data: "main_menu" }],
   ];
 
-  if (review.serviceFeedback) {
-    lines.push(`Expérience: ${review.serviceFeedback}`);
-  }
-
-  if (Array.isArray(review.customAnswers)) {
-    for (const answer of review.customAnswers) {
-      if (answer?.label && answer.value !== undefined && answer.value !== "") {
-        lines.push(`${answer.label}: ${answer.value}`);
-      }
+  try {
+    const parsedUrl = new URL(dashboardUrl);
+    if (
+      ["http:", "https:"].includes(parsedUrl.protocol) &&
+      !["localhost", "127.0.0.1", "::1"].includes(parsedUrl.hostname)
+    ) {
+      keyboard.push([{ text: "Ouvrir le dashboard", url: dashboardUrl }]);
     }
+  } catch {
+    // Ignore invalid dashboard URLs; callback actions remain available.
   }
 
-  return lines.join("\n");
+  return keyboard;
 }
 
 function buildReviewTelegramMessage(
@@ -261,20 +190,20 @@ function buildReviewTelegramMessage(
   qrCode?: HydratedDocument<ICompanyQrCode>,
 ): string {
   const lines = [
-    `<b>📝 Nouvel avis pour ${company.name}</b>`,
-    ``,
-    qrCode?.label ? `📍 <b>QR code:</b> ${qrCode.label}` : "",
-    `⭐ <b>Note:</b> ${review.rating}/5`,
+    `<b>Nouvel avis pour ${company.name}</b>`,
+    "",
+    qrCode?.label ? `<b>QR code:</b> ${qrCode.label}` : "",
+    `<b>Score:</b> ${review.rating}/5`,
   ];
 
   if (review.serviceFeedback) {
-    lines.push(`💬 <b>Expérience:</b> ${review.serviceFeedback}`);
+    lines.push(`<b>Experience:</b> ${review.serviceFeedback}`);
   }
 
   if (Array.isArray(review.customAnswers)) {
     for (const answer of review.customAnswers) {
       if (answer?.label && answer.value !== undefined && answer.value !== "") {
-        lines.push(`📌 <b>${answer.label}:</b> ${answer.value}`);
+        lines.push(`<b>${answer.label}:</b> ${answer.value}`);
       }
     }
   }
@@ -292,8 +221,7 @@ function buildReviewEmailHtml(
       ? `<p><strong>Experience :</strong><br>${review.serviceFeedback}</p>`
       : "",
     ...(review.customAnswers || []).map((answer) => {
-      if (!answer?.label || answer.value === undefined || answer.value === "")
-        return "";
+      if (!answer?.label || answer.value === undefined || answer.value === "") return "";
       return `<p><strong>${answer.label} :</strong><br>${answer.value}</p>`;
     }),
   ]
@@ -304,9 +232,6 @@ function buildReviewEmailHtml(
     <div style="font-family: Arial, sans-serif; color: #102a43; line-height: 1.6;">
       <h2>Nouvel avis pour ${company.name}</h2>
       ${rows}
-      <p style="margin-top: 24px;">
-        <a href="${company.feedbackUrl.replace("/avis/", "/dashboard/reviews")}" style="display: inline-block; background: #0f766e; color: #fff; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: 700;">Voir mes avis</a>
-      </p>
     </div>
   `;
 }

@@ -1,6 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
 import { User } from "../models/User.js";
-import type { IUser } from "../models/User.js";
 import { HttpError } from "../utils/httpError.js";
 import { createTelegramLinkUrl } from "../services/telegramBot.service.js";
 
@@ -11,11 +10,18 @@ type AuthenticatedRequest = Request & {
 type UpdatePreferencesInput = {
   channels?: {
     email?: boolean;
-    whatsapp?: boolean;
     telegram?: boolean;
   };
-  preferredChannel?: "email" | "whatsapp" | "telegram";
 };
+
+function defaultPreferences() {
+  return {
+    channels: {
+      email: true,
+      telegram: false,
+    },
+  };
+}
 
 export async function getNotificationPreferences(
   req: AuthenticatedRequest,
@@ -24,22 +30,13 @@ export async function getNotificationPreferences(
 ) {
   try {
     const userId = req.user?._id;
-    if (!userId) {
-      throw new HttpError(401, "Unauthorized");
-    }
+    if (!userId) throw new HttpError(401, "Unauthorized");
 
     const user = await User.findById(userId).select("notificationPreferences");
 
     res.json({
       ok: true,
-      preferences: user?.notificationPreferences || {
-        channels: {
-          email: true,
-          whatsapp: false,
-          telegram: false,
-        },
-        preferredChannel: "email",
-      },
+      preferences: user?.notificationPreferences || defaultPreferences(),
     });
   } catch (error) {
     if (error instanceof HttpError) {
@@ -57,27 +54,18 @@ export async function updateNotificationPreferences(
 ) {
   try {
     const userId = req.user?._id;
-    if (!userId) {
-      throw new HttpError(401, "Unauthorized");
-    }
+    if (!userId) throw new HttpError(401, "Unauthorized");
 
-    const { channels, preferredChannel } = req.body as UpdatePreferencesInput;
-
-    const updateData: any = {};
+    const { channels } = req.body as UpdatePreferencesInput;
+    const updateData: Record<string, unknown> = {};
 
     if (channels) {
       updateData["notificationPreferences"] = {
         channels: {
           email: channels.email ?? true,
-          whatsapp: channels.whatsapp ?? false,
           telegram: channels.telegram ?? false,
         },
-        preferredChannel: preferredChannel || "email",
       };
-    }
-
-    if (preferredChannel && !channels) {
-      updateData["notificationPreferences.preferredChannel"] = preferredChannel;
     }
 
     const user = await User.findByIdAndUpdate(
@@ -106,9 +94,7 @@ export async function getTelegramProfile(
 ) {
   try {
     const userId = req.user?._id;
-    if (!userId) {
-      throw new HttpError(401, "Unauthorized");
-    }
+    if (!userId) throw new HttpError(401, "Unauthorized");
 
     const user = await User.findById(userId).select("telegramProfile");
 
@@ -132,9 +118,7 @@ export async function getTelegramLink(
 ) {
   try {
     const userId = req.user?._id;
-    if (!userId) {
-      throw new HttpError(401, "Unauthorized");
-    }
+    if (!userId) throw new HttpError(401, "Unauthorized");
 
     res.json({
       ok: true,
@@ -157,9 +141,7 @@ export async function disconnectTelegram(
 ) {
   try {
     const userId = req.user?._id;
-    if (!userId) {
-      throw new HttpError(401, "Unauthorized");
-    }
+    if (!userId) throw new HttpError(401, "Unauthorized");
 
     const user = await User.findByIdAndUpdate(
       userId,

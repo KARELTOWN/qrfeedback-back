@@ -23,6 +23,8 @@ export type CustomQuestionConfig = {
 
 export type FeedbackFormConfig = {
   title: string;
+  welcomeTitle: string;
+  welcomeMessage: string;
   fields: FeedbackFieldConfig[];
   customQuestions: CustomQuestionConfig[];
 };
@@ -51,6 +53,8 @@ function toBoolean(value: unknown, fallback = false) {
 export function getDefaultFeedbackFormConfig(companyName?: string): FeedbackFormConfig {
   return {
     title: companyName ? `Votre avis compte pour ${companyName}` : 'Votre avis compte',
+    welcomeTitle: "Un avis aujourd’hui, une meilleure expérience demain.",
+    welcomeMessage: "Votre partage d'expérience nous aide à mieux vous servir.",
     fields: fieldDefaults.map((field) => ({ ...field })),
     customQuestions: []
   };
@@ -64,6 +68,8 @@ export function normalizeFeedbackFormConfig(raw: unknown, companyName?: string):
 
   return {
     title: cleanText(source.title, defaults.title) || defaults.title,
+    welcomeTitle: cleanText(source.welcomeTitle, defaults.welcomeTitle) || defaults.welcomeTitle,
+    welcomeMessage: cleanText(source.welcomeMessage, defaults.welcomeMessage) || defaults.welcomeMessage,
     fields: defaults.fields.map((defaultField) => {
       const sourceField = sourceByKey.get(defaultField.key) as Partial<FeedbackFieldConfig> | undefined;
       return {

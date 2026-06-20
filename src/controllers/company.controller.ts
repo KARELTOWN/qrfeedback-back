@@ -11,7 +11,6 @@ export async function registerCompany(req: Request, res: Response) {
     slug: company.slug,
     feedbackUrl: company.feedbackUrl,
     qrCodeDataUrl: company.qrCodeDataUrl,
-    freeMessagesLimit: company.freeMessagesLimit,
     freeEmailNotificationsLimit: company.freeEmailNotificationsLimit
   });
 }
@@ -19,6 +18,14 @@ export async function registerCompany(req: Request, res: Response) {
 export async function getPublicCompany(req: Request, res: Response) {
   const company = await companyService.getPublicCompany(String(req.params.slug));
   res.json(company);
+}
+
+export async function recordPublicScan(req: Request, res: Response) {
+  res.json(await companyService.recordPublicScan(String(req.params.slug), {
+    idempotencyKey: typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey : undefined,
+    source: typeof req.body?.source === 'string' ? req.body.source : undefined,
+    userAgent: req.get('user-agent') || undefined
+  }));
 }
 
 export async function getPublicProof(req: Request, res: Response) {

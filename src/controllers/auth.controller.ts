@@ -11,6 +11,7 @@ export async function login(req: Request, res: Response) {
   res.json(result);
 }
 
+
 export async function verifyOtp(req: Request, res: Response) {
   const result = await authService.verifyOtp(req.body);
   res.json(result);

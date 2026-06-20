@@ -34,13 +34,7 @@ const userSchema = new mongoose.Schema(
     notificationPreferences: {
       channels: {
         email: { type: Boolean, default: true },
-        whatsapp: { type: Boolean, default: false },
         telegram: { type: Boolean, default: false },
-      },
-      preferredChannel: {
-        type: String,
-        enum: ["email", "whatsapp", "telegram"],
-        default: "email",
       },
     },
     // Profil Telegram

@@ -18,8 +18,6 @@ const reviewSchema = new mongoose.Schema({
     default: 'pending'
   },
   notificationError: { type: String },
-  notificationWhatsappNumber: { type: String, trim: true },
-  whatsappMessageId: { type: String, trim: true, index: true },
   notificationChargedAt: { type: Date },
   emailNotificationStatus: {
     type: String,
@@ -28,7 +26,17 @@ const reviewSchema = new mongoose.Schema({
   },
   emailNotificationError: { type: String },
   notificationEmail: { type: String, trim: true },
-  emailNotificationChargedAt: { type: Date }
+  emailNotificationChargedAt: { type: Date },
+  moderationStatus: {
+    type: String,
+    enum: ['published', 'archived'],
+    default: 'published',
+    index: true
+  },
+  tags: [{ type: String, trim: true }],
+  internalNote: { type: String, trim: true },
+  responseText: { type: String, trim: true },
+  respondedAt: { type: Date }
 }, { timestamps: true });
 
 export type IReview = InferSchemaType<typeof reviewSchema> & {

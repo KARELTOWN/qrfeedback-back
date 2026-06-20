@@ -8,6 +8,7 @@ const router = Router();
 
 router.post('/register', registerCompanyValidator, handleValidation, asyncHandler(companyController.registerCompany));
 router.get('/public/proof', asyncHandler(companyController.getPublicProof));
+router.post('/:slug/scan', companySlugValidator, handleValidation, asyncHandler(companyController.recordPublicScan));
 router.get('/:slug', companySlugValidator, handleValidation, asyncHandler(companyController.getPublicCompany));
 
 export default router;

@@ -14,8 +14,7 @@ export async function seedSuperAdmin() {
         name: 'QR Feedback Admin',
         slug: 'qr-feedback-admin',
         email: SUPERADMIN_EMAIL,
-        feedbackUrl: `${env.frontendUrl}/admin`,
-        freeMessagesLimit: 0
+        feedbackUrl: `${env.frontendUrl}/admin`
       }
     },
     { new: true, upsert: true }

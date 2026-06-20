@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { Company } from '../models/Company.js';
 import { CompanyQrCode } from '../models/CompanyQrCode.js';
+import { QrScan } from '../models/QrScan.js';
 import { Review } from '../models/Review.js';
 import { HttpError } from '../utils/httpError.js';
 import { createSlug } from '../utils/slug.js';
@@ -12,7 +13,12 @@ import { sendMail } from './mail.service.js';
 type RegisterCompanyInput = {
   name: string;
   email: string;
-  whatsappNumber?: string;
+};
+
+type RecordPublicScanInput = {
+  idempotencyKey?: string;
+  userAgent?: string;
+  source?: string;
 };
 
 type ReminderScheduleItem = {
@@ -42,20 +48,17 @@ export function buildReminderSchedule(limitReachedAt: Date): ReminderScheduleIte
   return schedule;
 }
 
-export async function registerCompany({ name, email, whatsappNumber }: RegisterCompanyInput) {
+export async function registerCompany({ name, email }: RegisterCompanyInput) {
   const slug = createSlug(name);
   const feedbackUrl = `${env.frontendUrl}/avis/${slug}`;
   const qrCodeDataUrl = await generateQrDataUrl(feedbackUrl);
-  const normalizedWhatsappNumber = whatsappNumber?.trim() || undefined;
 
   const company = await Company.create({
     name,
     email,
-    whatsappNumber: normalizedWhatsappNumber,
     slug,
     feedbackUrl,
     qrCodeDataUrl,
-    freeMessagesLimit: 0,
     freeEmailNotificationsLimit: env.freeEmailNotifications,
     unlimitedAccess: true,
     unlimitedAccessActivatedAt: new Date()
@@ -87,7 +90,7 @@ export async function getPublicCompany(slug: string) {
     };
   }
 
-  const qrCode = await CompanyQrCode.findOne({ slug });
+  const qrCode = await CompanyQrCode.findOne({ slug, isActive: { $ne: false } });
   if (!qrCode) throw new HttpError(404, 'Entreprise introuvable.');
 
   const qrCompany = await Company.findById(qrCode.company).select('name feedbackFormConfig');
@@ -99,6 +102,66 @@ export async function getPublicCompany(slug: string) {
     feedbackUrl: qrCode.feedbackUrl,
     feedbackFormConfig: getCompanyFeedbackFormConfig(qrCompany)
   };
+}
+
+export async function recordPublicScan(slug: string, input: RecordPublicScanInput = {}) {
+  const company = await Company.findOne({ slug }).select('_id slug');
+  if (company) {
+    await createScanEvent({
+      companyId: company._id,
+      slug: company.slug,
+      idempotencyKey: input.idempotencyKey,
+      userAgent: input.userAgent,
+      source: input.source
+    });
+    return { ok: true };
+  }
+
+  const qrCode = await CompanyQrCode.findOne({ slug, isActive: { $ne: false } }).select('_id company slug');
+  if (!qrCode) throw new HttpError(404, 'QR code introuvable.');
+
+  const created = await createScanEvent({
+    companyId: qrCode.company,
+    qrCodeId: qrCode._id,
+    slug: qrCode.slug,
+    idempotencyKey: input.idempotencyKey,
+    userAgent: input.userAgent,
+    source: input.source
+  });
+
+  if (created) {
+    await CompanyQrCode.updateOne(
+      { _id: qrCode._id },
+      { $inc: { scanCount: 1 }, $set: { lastScannedAt: new Date() } }
+    );
+  }
+
+  return { ok: true };
+}
+
+async function createScanEvent(input: {
+  companyId: unknown;
+  qrCodeId?: unknown;
+  slug: string;
+  idempotencyKey?: string;
+  userAgent?: string;
+  source?: string;
+}) {
+  try {
+    await QrScan.create({
+      company: input.companyId,
+      qrCode: input.qrCodeId,
+      slug: input.slug,
+      idempotencyKey: input.idempotencyKey?.trim().slice(0, 160) || undefined,
+      userAgent: input.userAgent?.trim().slice(0, 300) || undefined,
+      source: input.source?.trim().slice(0, 60) || undefined,
+      scannedAt: new Date()
+    });
+    return true;
+  } catch (error: any) {
+    if (error?.code === 11000) return false;
+    throw error;
+  }
 }
 
 export async function getPublicProof() {

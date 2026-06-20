@@ -12,11 +12,10 @@
     "generate:encryption-key": "tsx src/scripts/generate-encryption-key.ts",
     "secret:set": "tsx src/scripts/set-secret.ts",
     "secret:list": "tsx src/scripts/list-secrets.ts",
-    "whatsapp:template:create": "tsx src/scripts/create-whatsapp-template.ts",
     "cleanup:feedback-legacy": "tsx src/scripts/cleanup-feedback-legacy-fields.ts",
-    "migrate:notification-credits": "tsx src/scripts/migrate-notification-credits.ts",
     "migrate:email-free-quota": "tsx src/scripts/migrate-email-free-quota.ts",
     "seed:ai-reviews": "tsx src/scripts/seed-ai-analysis-reviews.ts",
+    "test": "tsx --test tests/**/*.test.ts",
     "telegram:setup": "tsx src/scripts/setup-telegram-bot.ts"
   },
   "dependencies": {
