@@ -78,6 +78,10 @@ export async function updateNotificationPreferences(req: Request, res: Response)
   res.json(await dashboardService.updateNotificationPreferences(req.company, req.body));
 }
 
+export async function updateRatingGoal(req: Request, res: Response) {
+  res.json(await dashboardService.updateRatingGoal(req.company, req.body));
+}
+
 export async function getAiOverview(req: Request, res: Response) {
   res.json(await reviewAnalyticsService.getAiOverview(req.company, {
     qrCodeId: req.query.qrCodeId ? String(req.query.qrCodeId) : undefined,

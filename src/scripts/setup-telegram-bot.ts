@@ -11,6 +11,7 @@
  * 3. Enregistre les commandes du bot
  */
 
+import crypto from "crypto";
 import {
   readFileSecret,
   writeFileSecret,
@@ -80,6 +81,24 @@ async function setupTelegramBot() {
 
     if (webhookUrl) {
       console.log("\n🔗 Configuration du webhook...");
+
+      const secretPattern = /^[A-Za-z0-9_-]{1,256}$/;
+      let webhookSecret =
+        env.telegram.webhookSecret || (await readFileSecret("telegramWebhookSecret"));
+
+      if (webhookSecret && !secretPattern.test(webhookSecret)) {
+        console.warn(
+          "⚠️  Le secret de webhook stocke contient des caracteres non autorises par Telegram (A-Z, a-z, 0-9, _, - uniquement). Regeneration...",
+        );
+        webhookSecret = "";
+      }
+
+      if (!webhookSecret) {
+        webhookSecret = crypto.randomBytes(32).toString("hex");
+        await writeFileSecret("telegramWebhookSecret", webhookSecret);
+        console.log("✅ Secret de webhook genere et sauvegarde");
+      }
+
       const webhookResponse = await fetch(
         `https://api.telegram.org/bot${botToken}/setWebhook`,
         {
@@ -87,6 +106,7 @@ async function setupTelegramBot() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             url: webhookUrl,
+            secret_token: webhookSecret,
           }),
         },
       );
@@ -94,6 +114,9 @@ async function setupTelegramBot() {
       const webhookResult = await webhookResponse.json();
       if (webhookResult.ok) {
         console.log(`✅ Webhook configuré: ${webhookUrl}`);
+        console.log(
+          "   Definissez TELEGRAM_WEBHOOK_SECRET avec la meme valeur sur le serveur si vous ne stockez pas les secrets fichier en production.",
+        );
       } else {
         console.warn(
           "⚠️  Erreur lors de la configuration du webhook:",

@@ -57,6 +57,7 @@ export const env = {
     botToken: process.env.TELEGRAM_BOT_TOKEN || "",
     botUsername: process.env.TELEGRAM_BOT_USERNAME || "QrFeedback_Bot",
     webhookUrl: process.env.TELEGRAM_WEBHOOK_URL || "",
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
     webAppUrl: process.env.TELEGRAM_WEBAPP_URL || "",
     authMaxAgeSeconds: Number(process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 3600),
   },

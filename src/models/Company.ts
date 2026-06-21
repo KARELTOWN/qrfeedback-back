@@ -74,6 +74,7 @@ const companySchema = new mongoose.Schema(
     freeEmailNotificationsUsed: { type: Number, default: 0 },
     paidEmailNotificationsBalance: { type: Number, default: 0 },
     unlimitedAccess: { type: Boolean, default: true },
+    ratingGoal: { type: Number, default: 4.5, min: 1, max: 5 },
     unlimitedAccessActivatedAt: { type: Date },
     limitReachedAt: { type: Date },
     reminderSchedule: [reminderSchema],

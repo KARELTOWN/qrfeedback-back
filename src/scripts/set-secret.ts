@@ -14,6 +14,11 @@ try {
   if (value.length < 8) {
     throw new Error('La valeur doit contenir au moins 8 caractères.');
   }
+  if (nameInput === 'telegramWebhookSecret' && !/^[A-Za-z0-9_-]{1,256}$/.test(value)) {
+    throw new Error(
+      "Le secret_token Telegram n'accepte que les caractères A-Z, a-z, 0-9, _ et - (1 à 256 caractères)."
+    );
+  }
 
   const secret = await writeFileSecret(nameInput as SecretName, value);
   console.log(`Secret ${secret.name} chiffré: ${secret.maskedValue}`);

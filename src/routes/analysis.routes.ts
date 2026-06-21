@@ -7,5 +7,7 @@ const router = Router();
 router.use(requireAuth);
 router.post('/analyse', asyncHandler(analysisController.analyse));
 router.post('/recommandations', asyncHandler(analysisController.recommendations));
+router.post('/analyse/export.pdf', asyncHandler(analysisController.exportPdf));
+router.post('/analyse/topics/:topicKey', asyncHandler(analysisController.topicReviews));
 
 export default router;

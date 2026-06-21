@@ -60,7 +60,7 @@ test('feedback form sanitization caps custom questions and validates types', () 
 });
 
 test('secret vault only allows active platform secrets', () => {
-  assert.deepEqual([...secretNames], ['jwtSecret', 'telegramBotToken', 'openaiApiKey']);
+  assert.deepEqual([...secretNames], ['jwtSecret', 'telegramBotToken', 'telegramWebhookSecret', 'openaiApiKey']);
 });
 
 test('admin Telegram ads expose publishing routes and date-window checks', () => {

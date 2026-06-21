@@ -8,9 +8,9 @@ import { env } from "../config/env.js";
 import { readFileSecret } from "./fileSecret.service.js";
 import { User } from "../models/User.js";
 import { Company } from "../models/Company.js";
-import { CompanyQrCode } from "../models/CompanyQrCode.js";
+import { CompanyQrCode, type ICompanyQrCode } from "../models/CompanyQrCode.js";
 import { TelegramLinkToken } from "../models/TelegramLinkToken.js";
-import { Review } from "../models/Review.js";
+import { Review, type IReview } from "../models/Review.js";
 import { generateQrDataUrl } from "./qr.service.js";
 import { buildQrPdfBuffer } from "./pdf.service.js";
 import { createSlug } from "../utils/slug.js";
@@ -26,6 +26,12 @@ import { searchReviewsSemantically } from "./typesense.service.js";
 import type { Types } from "mongoose";
 
 let bot: TelegramBotConstructor | null = null;
+
+// Shape of a Review document after `.populate("qrCode", "label slug feedbackUrl")` —
+// Mongoose's static types don't reflect populate(), so this fills the gap instead of `any`.
+type ReviewWithQr = IReview & {
+  qrCode?: { label?: string; slug?: string; feedbackUrl?: string } | null;
+};
 
 type UserContextState =
   | "creating_qr_name"
@@ -64,10 +70,45 @@ type ReviewFilter = {
 const REVIEWS_PER_TELEGRAM_PAGE = 10;
 const QR_CODES_PER_TELEGRAM_PAGE = 10;
 
-const userContexts = new Map<string, UserContext>();
-const reviewTagTokens = new Map<string, string>();
-const reviewFilterTokens = new Map<string, ReviewFilter>();
-const qrActionTokens = new Map<string, { qrCodeId: string; qrCodeLabel: string }>();
+// Bounded, TTL-evicting cache for the bot's ephemeral state (conversation context, callback
+// tokens). Plain Maps here would grow forever — every keyboard render used to mint a fresh
+// random token that was never removed, leaking memory for the life of the process.
+class BoundedCache<T> {
+  private store = new Map<string, { value: T; expiresAt: number }>();
+
+  constructor(private maxEntries: number, private ttlMs: number) {}
+
+  set(key: string, value: T) {
+    if (!this.store.has(key) && this.store.size >= this.maxEntries) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) this.store.delete(oldestKey);
+    }
+    this.store.set(key, { value, expiresAt: Date.now() + this.ttlMs });
+  }
+
+  get(key: string): T | undefined {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt < Date.now()) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry.value;
+  }
+
+  delete(key: string) {
+    this.store.delete(key);
+  }
+}
+
+const USER_CONTEXT_TTL_MS = 30 * 60 * 1000;
+const TOKEN_TTL_MS = 60 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 5000;
+
+const userContexts = new BoundedCache<UserContext>(MAX_CACHE_ENTRIES, USER_CONTEXT_TTL_MS);
+const reviewTagTokens = new BoundedCache<string>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
+const reviewFilterTokens = new BoundedCache<ReviewFilter>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
+const qrActionTokens = new BoundedCache<{ qrCodeId: string; qrCodeLabel: string }>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
 
 function formatPercent(value: unknown) {
   return `${Number(value || 0).toFixed(Number(value || 0) % 1 === 0 ? 0 : 2)}%`;
@@ -269,7 +310,7 @@ function formatReviewDate(value: unknown) {
   return new Date(String(value)).toLocaleDateString("fr-FR");
 }
 
-function getReviewQrLabel(review: any) {
+function getReviewQrLabel(review: ReviewWithQr) {
   return review.qrCode?.label || review.qrCode?.slug || "QR non precise";
 }
 
@@ -277,15 +318,15 @@ function formatModerationStatus(value: unknown) {
   return String(value) === "archived" ? "Archive" : "Publie";
 }
 
-function formatReviewExtraAnswers(review: any, limit = 2) {
+function formatReviewExtraAnswers(review: ReviewWithQr, limit = 2) {
   return (review.customAnswers || [])
-    .filter((answer: any) => answer?.value !== undefined && answer?.value !== "")
+    .filter((answer) => answer?.value !== undefined && answer?.value !== "")
     .slice(0, limit)
-    .map((answer: any) => `${escapeHtml(answer.label)}: ${escapeHtml(answer.value)}`)
+    .map((answer) => `${escapeHtml(answer.label)}: ${escapeHtml(answer.value)}`)
     .join("\n");
 }
 
-function formatShortReviewSummary(review: any, index: number) {
+function formatShortReviewSummary(review: ReviewWithQr, index: number) {
   const sentiment =
     review.rating >= 4 ? "Client content" : review.rating <= 2 ? "Client mecontent" : "Avis moyen";
   const comment = String(review.serviceFeedback || "Sans commentaire").replace(/\s+/g, " ").trim();
@@ -322,9 +363,11 @@ function createReviewTagToken(companyId: unknown, tag: string) {
 }
 
 function createReviewFilterToken(filter: ReviewFilter = {}) {
+  // Deterministic (content-only) hash: re-rendering the same filter reuses the same cache
+  // entry instead of minting a fresh one every time a keyboard is built.
   const token = crypto
     .createHash("sha1")
-    .update(`${Date.now()}:${Math.random()}:${JSON.stringify(filter)}`)
+    .update(JSON.stringify(filter))
     .digest("hex")
     .slice(0, 20);
   reviewFilterTokens.set(token, filter);
@@ -334,7 +377,7 @@ function createReviewFilterToken(filter: ReviewFilter = {}) {
 function createQrActionToken(qrCodeId: unknown, qrCodeLabel: unknown) {
   const token = crypto
     .createHash("sha1")
-    .update(`${Date.now()}:${Math.random()}:${String(qrCodeId)}:${String(qrCodeLabel || "")}`)
+    .update(`${String(qrCodeId)}:${String(qrCodeLabel || "")}`)
     .digest("hex")
     .slice(0, 20);
   qrActionTokens.set(token, {
@@ -433,7 +476,7 @@ async function findOrCreateGuestCompany(email: string, qrName: string) {
 async function sendQrAssets(
   chatId: number,
   companyName: string,
-  qrCode: any,
+  qrCode: ICompanyQrCode,
   caption?: string,
 ) {
   if (!bot) return;
@@ -536,6 +579,9 @@ export async function initializeTelegramBot() {
     env.telegram.webhookUrl ? { polling: false } : { polling: true },
   );
 
+  bot.on("polling_error", (error) => console.error("[telegram:polling:error]", error));
+  bot.on("webhook_error", (error) => console.error("[telegram:webhook:error]", error));
+
   registerCommands();
   registerCallbacks();
 
@@ -552,21 +598,50 @@ export function processTelegramUpdate(update: unknown) {
   bot.processUpdate(update as Parameters<TelegramBotConstructor["processUpdate"]>[0]);
 }
 
+// Command handlers run inside node-telegram-bot-api's internal EventEmitter dispatch — an
+// unhandled rejection there fails silently (no reply, no structured log). Every entry point
+// goes through this wrapper so a DB hiccup still gets logged and the user gets a reply.
+function withErrorHandling<A extends [TelegramMessage, ...unknown[]]>(
+  handler: (...args: A) => Promise<void>,
+): (...args: A) => Promise<void> {
+  return async (...args: A) => {
+    const msg = args[0];
+    try {
+      await handler(...args);
+    } catch (error) {
+      console.error("[telegram:handler:error]", {
+        chatId: msg.chat?.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (bot && msg.chat?.id) {
+        await bot
+          .sendMessage(msg.chat.id, "Une erreur est survenue. Reessayez ou tapez /start.")
+          .catch(() => {});
+      }
+    }
+  };
+}
+
+const KNOWN_COMMAND_PATTERNS = [
+  /^\/start\b/, /^\/help\b/, /^\/settings\b/, /^\/create_qr\b/, /^\/my_qr_codes\b/,
+  /^\/reviews\b/, /^\/avis\b/, /^\/search\b/, /^\/ai\b/, /^\/qr\b/,
+];
+
 function registerCommands() {
   if (!bot) return;
 
-  bot.onText(/\/start/, handleStart);
-  bot.onText(/\/help/, handleHelp);
-  bot.onText(/\/settings/, handleSettings);
-  bot.onText(/\/create_qr/, handleCreateQr);
-  bot.onText(/\/my_qr_codes/, handleMyQrCodes);
-  bot.onText(/\/reviews/, handleReviews);
-  bot.onText(/\/avis/, handleReviews);
-  bot.onText(/^\/search$/, handleSearchPrompt);
-  bot.onText(/\/search (.+)/, handleSearch);
-  bot.onText(/\/ai/, handleAiOverview);
-  bot.onText(/\/qr (.+)/, handleQrCommand);
-  bot.on("message", handleDefaultMessage);
+  bot.onText(/\/start/, withErrorHandling(handleStart));
+  bot.onText(/\/help/, withErrorHandling(handleHelp));
+  bot.onText(/\/settings/, withErrorHandling(handleSettings));
+  bot.onText(/\/create_qr/, withErrorHandling(handleCreateQr));
+  bot.onText(/\/my_qr_codes/, withErrorHandling(handleMyQrCodes));
+  bot.onText(/\/reviews/, withErrorHandling(handleReviews));
+  bot.onText(/\/avis/, withErrorHandling(handleReviews));
+  bot.onText(/^\/search$/, withErrorHandling(handleSearchPrompt));
+  bot.onText(/\/search (.+)/, withErrorHandling(handleSearch));
+  bot.onText(/\/ai/, withErrorHandling(handleAiOverview));
+  bot.onText(/\/qr (.+)/, withErrorHandling(handleQrCommand));
+  bot.on("message", withErrorHandling(handleDefaultMessage));
 }
 
 function registerCallbacks() {
@@ -1137,7 +1212,7 @@ async function searchReviewsForChat(chatId: number, query: string, filter: Revie
 
     const text = `<b>Resultats pour "${escapeHtml(query)}"</b>\n\n${results.documents
       .map(
-        (result: any, i: number) =>
+        (result, i) =>
           `${i + 1}. <b>${result.rating}/5</b>\n${escapeHtml(result.serviceFeedback || "Sans commentaire").slice(0, 120)}`,
       )
       .join("\n\n")}`;
@@ -1163,7 +1238,12 @@ async function handleDefaultMessage(msg: TelegramMessage) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
 
-  if (text.startsWith("/")) return;
+  if (text.startsWith("/")) {
+    if (!KNOWN_COMMAND_PATTERNS.some((pattern) => pattern.test(text))) {
+      await bot.sendMessage(chatId, "Commande inconnue. Tapez /help pour la liste des commandes.");
+    }
+    return;
+  }
 
   const userContext = getUserContext(chatId, msg.from?.id);
 

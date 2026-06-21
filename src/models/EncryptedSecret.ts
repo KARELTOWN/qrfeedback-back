@@ -3,6 +3,7 @@ import mongoose, { type InferSchemaType, type Types } from "mongoose";
 export const secretNames = [
   "jwtSecret",
   "telegramBotToken",
+  "telegramWebhookSecret",
   "openaiApiKey",
 ] as const;
 

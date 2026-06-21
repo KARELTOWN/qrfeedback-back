@@ -8,6 +8,7 @@ import { buildPagination, normalizePagination, type PaginationInput } from '../u
 import { HttpError } from '../utils/httpError.js';
 import { getCompanyFeedbackFormConfig, sanitizeFeedbackFormConfig } from './feedbackForm.service.js';
 import { searchReviewsInTypesense, TypesenseRequestError, type ReviewSearchFilters } from './typesense.service.js';
+import { sentimentSummary } from './reviewAnalytics.service.js';
 
 type ReviewFilterInput = PaginationInput & {
   contactType?: string;
@@ -243,6 +244,7 @@ export async function getCompanyStats(company: HydratedDocument<ICompany>, input
     scanCount: scans,
     conversionRate: conversionRate(current?.count || 0, scans),
     averageRating: currentAverage,
+    ratingGoal: company.ratingGoal ?? 4.5,
     remainingMessages: null,
     remainingEmailNotifications: null,
     unlimitedAccess: true,
@@ -281,7 +283,7 @@ export async function getQrTrends(company: HydratedDocument<ICompany>, { weeks }
   firstWeek.setDate(firstWeek.getDate() - (weeks - 1) * 7);
   const [qrCodes, reviews, scans] = await Promise.all([
     CompanyQrCode.find({ company: company._id }).sort({ createdAt: 1 }).lean(),
-    Review.find({ company: company._id, qrCode: { $exists: true }, moderationStatus: { $ne: 'archived' }, createdAt: { $gte: firstWeek, $lte: periodEnd } }).select('qrCode rating createdAt').lean(),
+    Review.find({ company: company._id, qrCode: { $exists: true }, moderationStatus: { $ne: 'archived' }, createdAt: { $gte: firstWeek, $lte: periodEnd } }).select('qrCode rating createdAt serviceFeedback customAnswers').lean(),
     QrScan.find({ company: company._id, qrCode: { $exists: true }, scannedAt: { $gte: firstWeek, $lte: periodEnd } }).select('qrCode').lean()
   ]);
   const weekStarts = Array.from({ length: weeks }, (_, index) => {
@@ -306,12 +308,15 @@ export async function getQrTrends(company: HydratedDocument<ICompany>, { weeks }
       return { start: start.toISOString(), end: end.toISOString(), count: bucket.length, averageRating: bucket.length ? Number(average(bucket).toFixed(2)) : null };
     });
     const latestPoint = [...points].reverse().find((point) => point.averageRating !== null);
+    const sentiment = sentimentSummary(qrReviews as unknown as Parameters<typeof sentimentSummary>[0]);
     return {
       qrCodeId: qrCode._id,
       label: qrCode.label || qrCode.slug,
       slug: qrCode.slug,
       isActive: qrCode.isActive !== false,
       currentRating: latestPoint?.averageRating || 0,
+      positiveRate: sentiment.positiveRate,
+      negativeRate: sentiment.negativeRate,
       trend: { direction, delta: direction === 'stable' ? 0 : trendDelta, method: 'first-half-vs-second-half' },
       sparkline: points,
       stats: { min: values.length ? Math.min(...values) : 0, max: values.length ? Math.max(...values) : 0, average: values.length ? Number(average(qrReviews).toFixed(2)) : 0, reviews: values.length, scans: scans.filter((scan) => String(scan.qrCode) === qrId).length }
@@ -449,6 +454,17 @@ export async function updateNotificationPreferences(company: HydratedDocument<IC
   });
   await company.save();
   return getNotificationPreferences(company);
+}
+
+export async function updateRatingGoal(company: HydratedDocument<ICompany>, payload: unknown) {
+  const source = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const value = Number(source.ratingGoal);
+  if (!Number.isFinite(value) || value < 1 || value > 5) {
+    throw new HttpError(400, "L'objectif doit être une note comprise entre 1 et 5.");
+  }
+  company.set('ratingGoal', Math.round(value * 10) / 10);
+  await company.save();
+  return { ratingGoal: company.ratingGoal };
 }
 
 export async function updateReviewModeration(company: HydratedDocument<ICompany>, reviewId: string, payload: unknown) {

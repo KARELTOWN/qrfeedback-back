@@ -17,6 +17,7 @@ router.get('/feedback-form-config', asyncHandler(dashboardController.getFeedback
 router.patch('/feedback-form-config', asyncHandler(dashboardController.updateFeedbackFormConfig));
 router.get('/notification-preferences', asyncHandler(dashboardController.getNotificationPreferences));
 router.patch('/notification-preferences', asyncHandler(dashboardController.updateNotificationPreferences));
+router.patch('/rating-goal', asyncHandler(dashboardController.updateRatingGoal));
 router.get('/ai/overview', asyncHandler(dashboardController.getAiOverview));
 router.get('/ai/search', asyncHandler(dashboardController.searchAiReviews));
 router.post('/ai/reindex', asyncHandler(dashboardController.reindexAiReviews));

@@ -21,7 +21,20 @@ type TelegramResponse = {
   };
   error_code?: number;
   description?: string;
+  parameters?: { retry_after?: number };
 };
+
+export class TelegramApiError extends Error {
+  errorCode?: number;
+  retryAfterSeconds?: number;
+
+  constructor(message: string, data: TelegramResponse) {
+    super(message);
+    this.name = "TelegramApiError";
+    this.errorCode = data.error_code;
+    this.retryAfterSeconds = data.parameters?.retry_after;
+  }
+}
 
 type SendTelegramMediaInput = {
   chatId: string;
@@ -92,7 +105,7 @@ export async function sendTelegram({
       errorCode: data.error_code,
       errorMessage: data.description,
     });
-    throw new Error(`Telegram error: ${data.description}`);
+    throw new TelegramApiError(`Telegram error: ${data.description}`, data);
   }
 
   console.info("[telegram:send:success]", {
@@ -141,7 +154,7 @@ export async function sendTelegramKeyboard(
 
   const data = (await response.json()) as TelegramResponse;
   if (!data.ok) {
-    throw new Error(`Telegram error: ${data.description}`);
+    throw new TelegramApiError(`Telegram error: ${data.description}`, data);
   }
 
   return {
@@ -202,7 +215,7 @@ export async function sendTelegramMedia({
 
   const data = (await response.json()) as TelegramResponse;
   if (!data.ok) {
-    throw new Error(`Telegram error: ${data.description}`);
+    throw new TelegramApiError(`Telegram error: ${data.description}`, data);
   }
 
   return {

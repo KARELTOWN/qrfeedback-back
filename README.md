@@ -154,6 +154,9 @@ Secrets supportes :
 ```text
 jwtSecret
 telegramBotToken
+jwtSecret,
+telegramWebhookSecret,
+openaiApiKey,
 ```
 
 Generer une cle maitre :
@@ -162,7 +165,7 @@ Generer une cle maitre :
 npm run generate:encryption-key
 ```
 
-Lister ou definir un secret :
+Lister ou definir un   :
 
 ```bash
 npm run secret:list

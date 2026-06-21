@@ -3,7 +3,25 @@ import { TelegramAd } from "../models/TelegramAd.js";
 import { User } from "../models/User.js";
 import { HttpError } from "../utils/httpError.js";
 import { buildPagination, normalizePagination, type PaginationInput } from "../utils/pagination.js";
-import { sendTelegram, sendTelegramMedia } from "./telegram.service.js";
+import { sendTelegram, sendTelegramMedia, TelegramApiError } from "./telegram.service.js";
+
+const BROADCAST_DELAY_MS = 50; // stays comfortably under Telegram's ~30 msg/sec global cap
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendWithRetry<T>(send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } catch (error) {
+    if (error instanceof TelegramApiError && error.errorCode === 429 && error.retryAfterSeconds) {
+      await sleep((error.retryAfterSeconds + 1) * 1000);
+      return await send();
+    }
+    throw error;
+  }
+}
 
 type TelegramAdMediaInput = {
   type: "image" | "video" | "audio";
@@ -183,20 +201,20 @@ export async function broadcastTelegramAd(adId: string): Promise<BroadcastResult
 
     try {
       const messageIds: string[] = [];
-      const messageResult = await sendTelegram({
-        chatId,
-        message,
-        disableWebPagePreview: false,
-      });
+      const messageResult = await sendWithRetry(() =>
+        sendTelegram({ chatId, message, disableWebPagePreview: false }),
+      );
       messageIds.push(String(messageResult.messageId));
 
       for (const media of ad.media) {
-        const result = await sendTelegramMedia({
-          chatId,
-          type: media.type,
-          url: media.url,
-          caption: media.caption || undefined,
-        });
+        const result = await sendWithRetry(() =>
+          sendTelegramMedia({
+            chatId,
+            type: media.type,
+            url: media.url,
+            caption: media.caption || undefined,
+          }),
+        );
         messageIds.push(String(result.messageId));
       }
 
@@ -216,6 +234,8 @@ export async function broadcastTelegramAd(adId: string): Promise<BroadcastResult
         sentAt: new Date(),
       });
     }
+
+    await sleep(BROADCAST_DELAY_MS);
   }
 
   ad.set("deliveries", deliveries);
