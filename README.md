@@ -38,6 +38,51 @@ npm run build
 npm start
 ```
 
+## Traitements asynchrones
+
+Les envois e-mail et Telegram d'un nouvel avis, l'indexation Typesense, les campagnes
+Telegram et les rapports hebdomadaires sont traites hors requete HTTP avec BullMQ et Redis.
+
+En production, lancer les deux processus :
+
+```bash
+npm start       # API HTTP / webhooks
+npm run worker  # notifications, outbox, indexation et planification
+```
+
+L'API ecrit d'abord un evenement dans MongoDB (`outboxevents`), avec une cle d'idempotence,
+avant de le proposer a Redis. Si Redis est momentanement indisponible, le worker repasse toutes
+les minutes sur les evenements non termines : une notification ne disparait donc pas
+entre l'ecriture de l'avis et sa mise en queue.
+
+Les conversations Telegram (creation de QR, ajout de tags, notes internes, recherches) sont
+stockees dans Redis avec un TTL de 30 minutes. Elles survivent ainsi aux redemarrages et restent
+partagees entre instances. Les jetons de boutons existants gardent leur TTL d'une heure.
+
+Ne demarrez pas plusieurs workers sans mettre en place une limite de concurrence Telegram
+adaptee a votre bot : BullMQ garantit la distribution des jobs, mais chaque fournisseur garde
+ses propres limites de debit.
+
+## Modèles de notification
+
+Avant le premier envoi après déploiement, initialiser le catalogue une seule fois :
+
+```bash
+npm run seed:notification-templates
+```
+
+Les modèles sont conservés dans MongoDB (`notificationtemplates`) et administrables par un
+superadministrateur via `/api/admin/notification-templates`. Les champs sont `emailTemplate`,
+`smsTemplate`, `emailTitle`, `smsTitle`, `name`, `emailVariables` et `smsVariables`.
+
+Le frontend admin doit utiliser [SunEditor](https://suneditor.com/fr/) pour éditer les champs
+HTML `emailTemplate` et `smsTemplate`. Les variables se saisissent sous la forme `#companyName`,
+`#rating` ou `#code`. Elles sont remplacées au moment de l'envoi. Les SMS sont définis et
+prévisualisables, mais aucun envoi SMS n'est activé à ce stade.
+
+Chaque e-mail est enveloppé dans un layout Pug commun (en-tête QrFeedback, titre et corps), ce
+qui évite de devoir reproduire la mise en page dans chaque modèle.
+
 Verification :
 
 ```bash

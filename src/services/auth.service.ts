@@ -8,7 +8,7 @@ import { HttpError } from '../utils/httpError.js';
 import { createSlug } from '../utils/slug.js';
 import { generateStrongPassword, hashPassword, hashToken, verifyPassword } from '../utils/password.js';
 import { generateQrDataUrl } from './qr.service.js';
-import { sendMail } from './mail.service.js';
+import { sendTemplateMail } from './notificationTemplate.service.js';
 import { readFileSecret } from './fileSecret.service.js';
 
 type SignupInput = {
@@ -159,18 +159,10 @@ async function sendOtp(user: HydratedDocument<IUser>, purpose: OtpPurpose) {
 
   const subject = purpose === 'reset-password' ? 'Code de reinitialisation QR Feedback' : 'Code de verification QR Feedback';
   const resetLink = `${env.frontendUrl}/forgot-password?email=${encodeURIComponent(user.email)}&step=code`;
-  await sendMail({
+  await sendTemplateMail({
+    name: 'auth-otp',
     to: user.email,
-    subject,
-    html: `
-      <p>Votre code QR Feedback est :</p>
-      <p style="font-size: 28px; font-weight: 700; letter-spacing: 4px;">${code}</p>
-      ${purpose === 'reset-password' ? `
-        <p>Si vous avez ferme la page, reprenez la reinitialisation ici :</p>
-        <p><a href="${resetLink}">Changer mon mot de passe</a></p>
-      ` : ''}
-      <p>Ce code expire dans 10 minutes.</p>
-    `
+    variables: { purpose: subject, code, expiresIn: '10 minutes', resetMessage: purpose === 'reset-password' ? `Reprenez la réinitialisation ici : ${resetLink}` : '' },
   });
 }
 

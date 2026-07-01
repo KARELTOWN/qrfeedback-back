@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import * as dashboardService from '../services/dashboard.service.js';
 import * as reviewAnalyticsService from '../services/reviewAnalytics.service.js';
+import { suggestReviewReply } from '../services/aiSuggestion.service.js';
 
 export async function getReviews(req: Request, res: Response) {
   const reviews = await dashboardService.getCompanyReviews(req.company, {
@@ -107,4 +108,16 @@ export async function reindexAiReviews(req: Request, res: Response) {
 
 export async function updateReviewModeration(req: Request, res: Response) {
   res.json(await dashboardService.updateReviewModeration(req.company, String(req.params.reviewId), req.body));
+}
+
+export async function suggestReply(req: Request, res: Response) {
+  res.json(await suggestReviewReply(req.company, String(req.params.reviewId)));
+}
+
+export async function getReviewRedirectConfig(req: Request, res: Response) {
+  res.json(dashboardService.getReviewRedirectConfig(req.company));
+}
+
+export async function updateReviewRedirectConfig(req: Request, res: Response) {
+  res.json(await dashboardService.updateReviewRedirectConfig(req.company, req.body));
 }

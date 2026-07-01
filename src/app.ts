@@ -17,6 +17,7 @@ import qrCodeRoutes from "./routes/qrcode.routes.js";
 import telegramRoutes from "./routes/telegram.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import analysisRoutes from './routes/analysis.routes.js';
+import testimonialsRoutes from './routes/testimonials.routes.js';
 
 export const app = express();
 
@@ -64,6 +65,7 @@ app.use("/api/secrets", secretRoutes);
 app.use("/api/qrcodes", qrCodeRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/webhooks/telegram", telegramRoutes);
+app.use('/api/public/testimonials', testimonialsRoutes);
 app.use('/api', analysisRoutes);
 
 app.use(errorHandler);

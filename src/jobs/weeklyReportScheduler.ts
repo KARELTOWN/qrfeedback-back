@@ -1,4 +1,3 @@
-import cron from "node-cron";
 import type { HydratedDocument } from "mongoose";
 import { User } from "../models/User.js";
 import { Company } from "../models/Company.js";
@@ -10,26 +9,7 @@ import {
   getLastWeekRange,
 } from "../services/weeklyReport.service.js";
 
-let isRunning = false;
-
-export function startWeeklyReportScheduler() {
-  cron.schedule("0 8 * * *", async () => {
-    if (isRunning) return;
-    isRunning = true;
-
-    try {
-      await sendWeeklyReports();
-    } catch (error) {
-      console.error("[weekly-report:scheduler:error]", error);
-    } finally {
-      isRunning = false;
-    }
-  });
-
-  console.info("[weekly-report:scheduler:started]");
-}
-
-async function sendWeeklyReports() {
+export async function sendWeeklyReports() {
   if (!bot) {
     console.warn("[weekly-report:skip] Bot not initialized");
     return;

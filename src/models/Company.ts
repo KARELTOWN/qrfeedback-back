@@ -59,6 +59,18 @@ const notificationPreferencesSchema = new mongoose.Schema(
   {
     emailEnabled: { type: Boolean, default: true },
     telegramEnabled: { type: Boolean, default: true },
+    smsEnabled: { type: Boolean, default: false },
+    managerPhone: { type: String, trim: true },
+    badReviewThreshold: { type: Number, default: 2, min: 1, max: 5 },
+  },
+  { _id: false },
+);
+
+const reviewRedirectConfigSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    goodRatingThreshold: { type: Number, default: 4, min: 1, max: 5 },
+    redirectUrl: { type: String, trim: true },
   },
   { _id: false },
 );
@@ -84,6 +96,10 @@ const companySchema = new mongoose.Schema(
       default: () => ({}),
     },
     telegramGuestChatId: { type: String, sparse: true, index: true },
+    reviewRedirectConfig: {
+      type: reviewRedirectConfigSchema,
+      default: () => ({}),
+    },
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },

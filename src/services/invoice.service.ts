@@ -1,4 +1,4 @@
-import { sendMail } from './mail.service.js';
+import { sendTemplateMail } from './notificationTemplate.service.js';
 import type { HydratedDocument } from 'mongoose';
 import type { ICompany } from '../models/Company.js';
 import type { IPayment } from '../models/Payment.js';
@@ -20,8 +20,10 @@ export async function sendInvoice({ company, payment, temporaryPassword }: SendI
     ? `<p>Votre mot de passe temporaire est : <strong>${temporaryPassword}</strong></p>`
     : '<p>Vous pouvez vous connecter avec votre mot de passe habituel.</p>';
 
-  await sendMail({
+  await sendTemplateMail({
+    name: 'invoice-issued',
     to: company.email,
+    variables: { companyName: company.name, invoiceNumber: payment.invoiceNumber, amountFcfa: payment.amountFcfa, passwordMessage: temporaryPassword ? `Votre mot de passe temporaire est : ${temporaryPassword}` : 'Vous pouvez vous connecter avec votre mot de passe habituel.' },
     subject: `Facture ${payment.invoiceNumber}`,
     html: `
       <p>Bonjour ${company.name},</p>

@@ -4,7 +4,7 @@ import { Review } from '../models/Review.js';
 import { User } from '../models/User.js';
 import { HttpError } from '../utils/httpError.js';
 import { generateStrongPassword, hashPassword } from '../utils/password.js';
-import { sendMail } from './mail.service.js';
+import { sendTemplateMail } from './notificationTemplate.service.js';
 import { buildPagination, normalizePagination, type PaginationInput } from '../utils/pagination.js';
 
 export async function getAdminStats() {
@@ -85,8 +85,10 @@ export async function generateUserPassword(userId: string) {
   user.tokenVersion = (user.tokenVersion || 0) + 1;
   await user.save();
 
-  await sendMail({
+  await sendTemplateMail({
+    name: 'admin-password-reset',
     to: user.email,
+    variables: { password },
     subject: 'Nouveau mot de passe QR Feedback',
     html: `
       <p>Bonjour,</p>

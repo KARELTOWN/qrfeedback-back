@@ -36,7 +36,27 @@ const reviewSchema = new mongoose.Schema({
   tags: [{ type: String, trim: true }],
   internalNote: { type: String, trim: true },
   responseText: { type: String, trim: true },
-  respondedAt: { type: Date }
+  respondedAt: { type: Date },
+  clientEmail: { type: String, trim: true, lowercase: true },
+  clientPhone: { type: String, trim: true },
+  clientEmailStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'skipped', 'failed'],
+    default: 'skipped'
+  },
+  clientEmailError: { type: String },
+  clientSmsStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'skipped', 'failed'],
+    default: 'skipped'
+  },
+  clientSmsError: { type: String },
+  managerSmsStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'skipped', 'failed'],
+    default: 'skipped'
+  },
+  managerSmsError: { type: String }
 }, { timestamps: true });
 
 export type IReview = InferSchemaType<typeof reviewSchema> & {

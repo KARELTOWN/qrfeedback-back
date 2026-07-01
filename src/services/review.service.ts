@@ -6,15 +6,15 @@ import { CompanyQrCode } from "../models/CompanyQrCode.js";
 import { Review } from "../models/Review.js";
 import { User } from "../models/User.js";
 import { HttpError } from "../utils/httpError.js";
-import { sendMail } from "./mail.service.js";
+import { sendTemplateMail } from "./notificationTemplate.service.js";
 import {
   cleanAnswerValue,
   getCompanyFeedbackFormConfig,
   getEnabledField,
 } from "./feedbackForm.service.js";
-import { indexReviewQuietly } from "./typesense.service.js";
 import { sendReviewNotification } from "./notification.service.js";
 import { logger } from "../utils/logger.js";
+import { publishOutboxEvent } from "./outbox.service.js";
 
 type ReviewInput = {
   serviceFeedback?: string;
@@ -72,10 +72,15 @@ async function notifyByEmail(
   }
 
   try {
-    await sendMail({
+    await sendTemplateMail({
+      name: "review-new-company",
       to: company.email,
-      subject: `Nouvel avis client - ${company.name}`,
-      html: reviewEmailHtml(company, review),
+      variables: {
+        companyName: company.name,
+        rating: review.rating,
+        serviceFeedback: review.serviceFeedback || "Sans commentaire",
+        dashboardUrl: company.feedbackUrl.replace("/avis/", "/dashboard/reviews"),
+      },
     });
 
     review.notificationEmail = company.email;
@@ -155,6 +160,51 @@ async function notifyLinkedUsersByTelegram(
   });
 }
 
+/** Executed by the worker. The API never waits for external delivery. */
+export async function deliverReviewEmailNotification(reviewId: string) {
+  const review = await Review.findById(reviewId);
+  if (!review) return;
+  if (review.emailNotificationStatus === "sent") return;
+  const company = await Company.findById(review.company);
+  if (!company) return;
+  const qrCode = review.qrCode ? await CompanyQrCode.findById(review.qrCode) : undefined;
+  await notifyByEmail(company, review, qrCode || undefined);
+  await review.save();
+}
+
+/** Executed by the worker. It remains idempotent at the event level. */
+export async function deliverReviewTelegramNotifications(reviewId: string) {
+  const review = await Review.findById(reviewId);
+  if (!review) return;
+  if (review.notificationStatus === "sent") return;
+  const company = await Company.findById(review.company);
+  if (!company) return;
+  const qrCode = review.qrCode ? await CompanyQrCode.findById(review.qrCode) : undefined;
+  await notifyLinkedUsersByTelegram(company, review, qrCode || undefined);
+  await review.save();
+}
+
+function extractClientContact(customAnswers: Array<{ type: string; value: unknown }>) {
+  let clientEmail: string | undefined;
+  let clientPhone: string | undefined;
+  for (const answer of customAnswers) {
+    if (answer.type === "email" && typeof answer.value === "string" && answer.value) {
+      clientEmail = answer.value.toLowerCase().trim();
+    }
+    if (answer.type === "phone" && typeof answer.value === "string" && answer.value) {
+      clientPhone = answer.value.trim();
+    }
+  }
+  return { clientEmail, clientPhone };
+}
+
+function resolveRedirectUrl(company: HydratedDocument<ICompany>, rating: number): string | undefined {
+  const cfg = company.reviewRedirectConfig;
+  if (!cfg?.enabled || !cfg.redirectUrl) return undefined;
+  const threshold = cfg.goodRatingThreshold ?? 4;
+  return rating >= threshold ? cfg.redirectUrl : undefined;
+}
+
 export async function createReviewAndNotify(
   company: HydratedDocument<ICompany>,
   payload: ReviewInput,
@@ -167,6 +217,10 @@ export async function createReviewAndNotify(
   );
   validateRequiredAnswers(formConfig, payload, customAnswers);
 
+  const { clientEmail, clientPhone } = extractClientContact(customAnswers);
+  const smsPrefs = company.notificationPreferences;
+  const managerSmsActive = Boolean(smsPrefs?.smsEnabled && smsPrefs?.managerPhone);
+
   const review = await Review.create({
     company: company._id,
     qrCode: qrCode?._id,
@@ -177,14 +231,33 @@ export async function createReviewAndNotify(
     rating: payload.rating,
     notificationStatus: "skipped",
     notificationError: "Notifications email et Telegram uniquement.",
+    clientEmail,
+    clientPhone,
+    clientEmailStatus: clientEmail ? "pending" : "skipped",
+    clientSmsStatus: clientPhone ? "pending" : "skipped",
+    managerSmsStatus: managerSmsActive ? "pending" : "skipped",
   });
 
-  indexReviewQuietly(review, qrCode);
-  await notifyByEmail(company, review, qrCode);
-  await notifyLinkedUsersByTelegram(company, review, qrCode);
+  review.emailNotificationStatus = notificationsEnabled(company, qrCode, "email") ? "pending" : "skipped";
+  review.notificationStatus = notificationsEnabled(company, qrCode, "telegram") ? "queued" : "skipped";
   await review.save();
 
-  return review;
+  const reviewId = String(review._id);
+  const companyId = String(company._id);
+
+  const outboxEvents: Parameters<typeof publishOutboxEvent>[0][] = [
+    { type: "review.notify.email", aggregateId: reviewId, companyId, payload: { reviewId }, idempotencyKey: `review:${reviewId}:notify:email` },
+    { type: "review.notify.telegram", aggregateId: reviewId, companyId, payload: { reviewId }, idempotencyKey: `review:${reviewId}:notify:telegram` },
+    { type: "review.index", aggregateId: reviewId, companyId, payload: { reviewId }, idempotencyKey: `review:${reviewId}:index` },
+  ];
+  if (clientEmail) outboxEvents.push({ type: "review.notify.client.email", aggregateId: reviewId, companyId, payload: { reviewId }, idempotencyKey: `review:${reviewId}:notify:client:email` });
+  if (clientPhone) outboxEvents.push({ type: "review.notify.client.sms", aggregateId: reviewId, companyId, payload: { reviewId }, idempotencyKey: `review:${reviewId}:notify:client:sms` });
+  if (managerSmsActive) outboxEvents.push({ type: "review.notify.manager.sms", aggregateId: reviewId, companyId, payload: { reviewId }, idempotencyKey: `review:${reviewId}:notify:manager:sms` });
+
+  await Promise.all(outboxEvents.map((e) => publishOutboxEvent(e)));
+
+  const redirectUrl = resolveRedirectUrl(company, payload.rating);
+  return { review, redirectUrl };
 }
 
 export async function createReviewForCompany(slug: string, payload: ReviewInput) {

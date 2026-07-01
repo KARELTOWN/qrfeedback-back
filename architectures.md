@@ -118,6 +118,26 @@ Evolution recommandee:
 - jobs idempotents.
 - verrous ou dedupe keys pour eviter les doubles executions.
 
+Implementation actuelle :
+
+- Redis + BullMQ assurent l'execution hors requete des notifications, indexations et taches planifiees.
+- MongoDB contient une outbox (`outboxevents`) avant toute publication dans Redis. Chaque evenement
+  a une cle d'idempotence, un statut et les erreurs/tentatives necessaires au rejeu.
+- Le processus `npm run worker` traite l'outbox et porte les jobs recurrents (campagnes Telegram,
+  rapports hebdomadaires et reprise de l'outbox). L'API ne doit pas lancer ces schedulers.
+- L'etat de conversation Telegram est stocke dans Redis avec expiration, et non dans la RAM HTTP.
+- Les futures automations WhatsApp/Telegram publient un evenement `automation.trigger` dans l'outbox;
+  elles ne doivent jamais executer un appel externe directement depuis un controller.
+
+## Modèles de notification
+
+- Les modèles e-mail/SMS plateforme sont stockés dans `notificationtemplates`, jamais codés dans un controller.
+- Les modèles déclarent les variables admises. La syntaxe est `#variable` et la substitution est effectuée
+  juste avant le rendu/envoi.
+- Le HTML e-mail administrable est rendu dans une enveloppe Pug commune avec le titre et le corps injectés.
+- Le SMS est prêt au niveau modèle et prévisualisation, mais le transport SMS n'est pas encore implémenté.
+- La gestion de ces modèles est réservée au superadministrateur. L'éditeur frontend recommandé est SunEditor.
+
 Tout traitement qui peut devenir long doit etre isole dans un service/job, jamais enfoui dans un controller.
 
 ## Frontend

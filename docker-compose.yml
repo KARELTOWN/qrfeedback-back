@@ -1,4 +1,29 @@
 services:
+  api:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      MONGO_URI: mongodb://admin:admin@mongodb:27017/qr_feedback?authSource=admin
+      REDIS_URL: redis://redis:6379
+      TYPESENSE_HOST: typesense
+    depends_on:
+      - mongodb
+      - redis
+      - typesense
+
+  worker:
+    build: .
+    command: npm run worker
+    environment:
+      MONGO_URI: mongodb://admin:admin@mongodb:27017/qr_feedback?authSource=admin
+      REDIS_URL: redis://redis:6379
+      TYPESENSE_HOST: typesense
+    depends_on:
+      - mongodb
+      - redis
+      - typesense
+
   mongodb:
     image: mongo:latest
     container_name: mongodb
@@ -29,8 +54,8 @@ services:
     image: axllent/mailpit:latest
     container_name: mailpit
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "11025:1025"
+      - "18025:8025"
     environment:
       MP_SMTP_AUTH: "admin:pass"
       MP_SMTP_AUTH_ALLOW_INSECURE: "1"
@@ -40,7 +65,7 @@ services:
     image: redis:7-alpine
     container_name: qr-feedback-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -49,7 +74,7 @@ services:
     image: typesense/typesense:30.2
     container_name: typesense
     ports:
-      - "8108:8108"
+      - "8109:8108"
     volumes:
       - typesense-data:/data
     command: "--data-dir /data --api-key=${TYPESENSE_API_KEY:-dev-typesense-key} --enable-cors"

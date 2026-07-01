@@ -442,18 +442,60 @@ export async function updateFeedbackFormConfig(company: HydratedDocument<ICompan
 export function getNotificationPreferences(company: HydratedDocument<ICompany>) {
   return {
     emailEnabled: company.notificationPreferences?.emailEnabled !== false,
-    telegramEnabled: company.notificationPreferences?.telegramEnabled !== false
+    telegramEnabled: company.notificationPreferences?.telegramEnabled !== false,
+    smsEnabled: company.notificationPreferences?.smsEnabled === true,
+    managerPhone: company.notificationPreferences?.managerPhone ?? null,
+    badReviewThreshold: company.notificationPreferences?.badReviewThreshold ?? 2,
   };
 }
 
 export async function updateNotificationPreferences(company: HydratedDocument<ICompany>, payload: unknown) {
   const source = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const current = company.notificationPreferences ?? {};
+
+  const managerPhone = typeof source.managerPhone === 'string'
+    ? source.managerPhone.trim() || null
+    : current.managerPhone ?? null;
+
+  const badReviewThreshold = typeof source.badReviewThreshold === 'number' && source.badReviewThreshold >= 1 && source.badReviewThreshold <= 5
+    ? Math.floor(source.badReviewThreshold)
+    : current.badReviewThreshold ?? 2;
+
   company.set('notificationPreferences', {
-    emailEnabled: typeof source.emailEnabled === 'boolean' ? source.emailEnabled : company.notificationPreferences?.emailEnabled !== false,
-    telegramEnabled: typeof source.telegramEnabled === 'boolean' ? source.telegramEnabled : company.notificationPreferences?.telegramEnabled !== false
+    emailEnabled: typeof source.emailEnabled === 'boolean' ? source.emailEnabled : current.emailEnabled !== false,
+    telegramEnabled: typeof source.telegramEnabled === 'boolean' ? source.telegramEnabled : current.telegramEnabled !== false,
+    smsEnabled: typeof source.smsEnabled === 'boolean' ? source.smsEnabled : current.smsEnabled === true,
+    managerPhone,
+    badReviewThreshold,
   });
   await company.save();
   return getNotificationPreferences(company);
+}
+
+export function getReviewRedirectConfig(company: HydratedDocument<ICompany>) {
+  return {
+    enabled: company.reviewRedirectConfig?.enabled === true,
+    goodRatingThreshold: company.reviewRedirectConfig?.goodRatingThreshold ?? 4,
+    redirectUrl: company.reviewRedirectConfig?.redirectUrl ?? null,
+  };
+}
+
+export async function updateReviewRedirectConfig(company: HydratedDocument<ICompany>, payload: unknown) {
+  const source = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const current = company.reviewRedirectConfig ?? {};
+
+  const redirectUrl = typeof source.redirectUrl === 'string' ? source.redirectUrl.trim().slice(0, 500) || null : current.redirectUrl ?? null;
+  const goodRatingThreshold = typeof source.goodRatingThreshold === 'number' && source.goodRatingThreshold >= 1 && source.goodRatingThreshold <= 5
+    ? Math.floor(source.goodRatingThreshold)
+    : current.goodRatingThreshold ?? 4;
+
+  company.set('reviewRedirectConfig', {
+    enabled: typeof source.enabled === 'boolean' ? source.enabled : current.enabled === true,
+    goodRatingThreshold,
+    redirectUrl,
+  });
+  await company.save();
+  return getReviewRedirectConfig(company);
 }
 
 export async function updateRatingGoal(company: HydratedDocument<ICompany>, payload: unknown) {

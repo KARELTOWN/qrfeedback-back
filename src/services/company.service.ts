@@ -8,7 +8,7 @@ import { createSlug } from '../utils/slug.js';
 import { getCompanyFeedbackFormConfig } from './feedbackForm.service.js';
 import { generateQrDataUrl } from './qr.service.js';
 import { buildQrPdfBuffer } from './pdf.service.js';
-import { sendMail } from './mail.service.js';
+import { sendTemplateMail } from './notificationTemplate.service.js';
 
 type RegisterCompanyInput = {
   name: string;
@@ -65,8 +65,10 @@ export async function registerCompany({ name, email }: RegisterCompanyInput) {
   });
 
   const pdf = await buildQrPdfBuffer({ companyName: name, feedbackUrl, qrCodeDataUrl });
-  await sendMail({
+  await sendTemplateMail({
+    name: 'company-qr-code-ready',
     to: email,
+    variables: { companyName: name, feedbackUrl },
     subject: 'Votre QR Code de collecte d’avis',
     html: `
       <p>Bonjour ${name},</p>

@@ -24,6 +24,7 @@ import { buildCompanyReviewsExcel } from './dashboard.service.js';
 import { getAiOverview } from "./reviewAnalytics.service.js";
 import { searchReviewsSemantically } from "./typesense.service.js";
 import type { Types } from "mongoose";
+import { deleteTelegramState, getTelegramState, putTelegramState } from "./telegramState.service.js";
 
 let bot: TelegramBotConstructor | null = null;
 
@@ -73,7 +74,7 @@ const QR_CODES_PER_TELEGRAM_PAGE = 10;
 // Bounded, TTL-evicting cache for the bot's ephemeral state (conversation context, callback
 // tokens). Plain Maps here would grow forever — every keyboard render used to mint a fresh
 // random token that was never removed, leaking memory for the life of the process.
-class BoundedCache<T> {
+class LegacyBoundedCache<T> {
   private store = new Map<string, { value: T; expiresAt: number }>();
 
   constructor(private maxEntries: number, private ttlMs: number) {}
@@ -105,10 +106,9 @@ const USER_CONTEXT_TTL_MS = 30 * 60 * 1000;
 const TOKEN_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 5000;
 
-const userContexts = new BoundedCache<UserContext>(MAX_CACHE_ENTRIES, USER_CONTEXT_TTL_MS);
-const reviewTagTokens = new BoundedCache<string>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
-const reviewFilterTokens = new BoundedCache<ReviewFilter>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
-const qrActionTokens = new BoundedCache<{ qrCodeId: string; qrCodeLabel: string }>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
+const reviewTagTokens = new LegacyBoundedCache<string>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
+const reviewFilterTokens = new LegacyBoundedCache<ReviewFilter>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
+const qrActionTokens = new LegacyBoundedCache<{ qrCodeId: string; qrCodeLabel: string }>(MAX_CACHE_ENTRIES, TOKEN_TTL_MS);
 
 function formatPercent(value: unknown) {
   return `${Number(value || 0).toFixed(Number(value || 0) % 1 === 0 ? 0 : 2)}%`;
@@ -121,29 +121,29 @@ function getContextKeys(chatId: number, telegramUserId?: number) {
   ];
 }
 
-function setUserContext(
+async function setUserContext(
   chatId: number,
   telegramUserId: number | undefined,
   state: UserContextState,
   payload: Omit<UserContext, "state"> = {},
 ) {
   for (const key of getContextKeys(chatId, telegramUserId)) {
-    userContexts.set(key, { state, ...payload });
+    await putTelegramState(`context:${key}`, { state, ...payload }, USER_CONTEXT_TTL_MS / 1000);
   }
 }
 
-function getUserContext(chatId: number, telegramUserId?: number) {
+async function getUserContext(chatId: number, telegramUserId?: number) {
   for (const key of getContextKeys(chatId, telegramUserId)) {
-    const context = userContexts.get(key);
+    const context = await getTelegramState<UserContext>(`context:${key}`);
     if (context) return context;
   }
 
   return null;
 }
 
-function clearUserContext(chatId: number, telegramUserId?: number) {
+async function clearUserContext(chatId: number, telegramUserId?: number) {
   for (const key of getContextKeys(chatId, telegramUserId)) {
-    userContexts.delete(key);
+    await deleteTelegramState(`context:${key}`);
   }
 }
 
@@ -175,14 +175,14 @@ function frontendButton(text: string, path = ""): TelegramInlineButton {
 
 function mainMenuKeyboard(): TelegramInlineButton[][] {
   return [
-    [{ text: "Mes avis", callback_data: "my_reviews" }],
-    [{ text: "Mes QR codes", callback_data: "my_qr_codes" }],
-    [{ text: "Creer un QR", callback_data: "create_qr" }],
-    [{ text: "Statistiques", callback_data: "dashboard_stats" }],
-    [{ text: "Analyse IA", callback_data: "ai_overview" }],
-    [{ text: "Parametres", callback_data: "settings" }],
-    [{ text: "Aide", callback_data: "help" }],
-    [frontendButton("Ouvrir le dashboard", "/dashboard")],
+    [{ text: "⭐ Mes avis", callback_data: "my_reviews" }],
+    [{ text: "📱 Mes QR codes", callback_data: "my_qr_codes" }],
+    [{ text: "➕ Creer un QR", callback_data: "create_qr" }],
+    [{ text: "📊 Statistiques", callback_data: "dashboard_stats" }],
+    [{ text: "🤖 Analyse IA", callback_data: "ai_overview" }],
+    [{ text: "⚙️ Parametres", callback_data: "settings" }],
+    [{ text: "❓ Aide", callback_data: "help" }],
+    [frontendButton("🖥️ Ouvrir le dashboard", "/dashboard")],
   ];
 }
 
@@ -191,24 +191,24 @@ function navigationKeyboard(
   extra: TelegramInlineButton[][] = [],
 ): TelegramInlineButton[][] {
   const rows = [...extra];
-  rows.push([{ text: "Retour", callback_data: backCallback || "main_menu" }]);
-  rows.push([{ text: "Menu principal", callback_data: "main_menu" }]);
+  rows.push([{ text: "◀️ Retour", callback_data: backCallback || "main_menu" }]);
+  rows.push([{ text: "🏠 Menu principal", callback_data: "main_menu" }]);
   return rows;
 }
 
 function reviewActionKeyboard(reviewId: string): TelegramInlineButton[][] {
   return [
     [
-      { text: "Voir details", callback_data: `review_detail_${reviewId}` },
-      { text: "Archiver", callback_data: `review_archive_${reviewId}` },
+      { text: "🔍 Voir details", callback_data: `review_detail_${reviewId}` },
+      { text: "📁 Archiver", callback_data: `review_archive_${reviewId}` },
     ],
     [
-      { text: "Ajouter une note", callback_data: `review_reply_${reviewId}` },
-      { text: "Ajouter un tag", callback_data: `review_tag_${reviewId}` },
+      { text: "📝 Ajouter une note", callback_data: `review_reply_${reviewId}` },
+      { text: "🏷️ Ajouter un tag", callback_data: `review_tag_${reviewId}` },
     ],
-    [frontendButton("Ouvrir le dashboard", "/dashboard/reviews")],
-    [{ text: "Retour", callback_data: "my_reviews" }],
-    [{ text: "Menu principal", callback_data: "main_menu" }],
+    [frontendButton("🖥️ Ouvrir le dashboard", "/dashboard/reviews")],
+    [{ text: "◀️ Retour", callback_data: "my_reviews" }],
+    [{ text: "🏠 Menu principal", callback_data: "main_menu" }],
   ];
 }
 
@@ -228,29 +228,29 @@ function reviewListKeyboard(filter: ReviewFilter = {}, hasNextPage = false): Tel
 
   return [
     ...paginationRows,
-    [{ text: "Filtrer", callback_data: `reviews_filters_${token}` }],
-    [{ text: "Recherche", callback_data: `search_reviews_${token}` }],
-    [{ text: "Tous les avis", callback_data: "my_reviews" }],
-    [{ text: "Retour", callback_data: "main_menu" }],
-    [{ text: "Menu principal", callback_data: "main_menu" }],
+    [{ text: "🔽 Filtrer", callback_data: `reviews_filters_${token}` }],
+    [{ text: "🔍 Recherche", callback_data: `search_reviews_${token}` }],
+    [{ text: "📋 Tous les avis", callback_data: "my_reviews" }],
+    [{ text: "◀️ Retour", callback_data: "main_menu" }],
+    [{ text: "🏠 Menu principal", callback_data: "main_menu" }],
   ];
 }
 
 function reviewFiltersKeyboard(filter: ReviewFilter = {}): TelegramInlineButton[][] {
   const token = createReviewFilterToken(filter);
   const rows: TelegramInlineButton[][] = [
-    [{ text: "Exporter Excel", callback_data: `reviews_export_${token}` }],
-    [{ text: "Par tag", callback_data: `reviews_by_tag_${token}` }],
-    [{ text: "Par statut", callback_data: `reviews_status_${token}` }],
-    [{ text: "Par score", callback_data: `reviews_rating_${token}` }],
-    [{ text: "Par sentiment", callback_data: `reviews_sentiment_${token}` }],
-    [{ text: "Recherche", callback_data: `search_reviews_${token}` }],
-    [{ text: "Retour", callback_data: "my_reviews" }],
-    [{ text: "Menu principal", callback_data: "main_menu" }],
+    [{ text: "📂 Exporter Excel", callback_data: `reviews_export_${token}` }],
+    [{ text: "🏷️ Par tag", callback_data: `reviews_by_tag_${token}` }],
+    [{ text: "📋 Par statut", callback_data: `reviews_status_${token}` }],
+    [{ text: "⭐ Par score", callback_data: `reviews_rating_${token}` }],
+    [{ text: "😊 Par sentiment", callback_data: `reviews_sentiment_${token}` }],
+    [{ text: "🔍 Recherche", callback_data: `search_reviews_${token}` }],
+    [{ text: "◀️ Retour", callback_data: "my_reviews" }],
+    [{ text: "🏠 Menu principal", callback_data: "main_menu" }],
   ];
 
   if (!filter.qrCodeId) {
-    rows.unshift([{ text: "Par QR code", callback_data: `reviews_by_qr_${token}` }]);
+    rows.unshift([{ text: "📱 Par QR code", callback_data: `reviews_by_qr_${token}` }]);
   }
 
   return rows;
@@ -277,12 +277,12 @@ function reviewSentimentKeyboard(filter: ReviewFilter = {}): TelegramInlineButto
   const token = createReviewFilterToken(filter);
   return [
     [
-      { text: "Content", callback_data: `reviews_sentiment_positive_${token}` },
-      { text: "Neutre", callback_data: `reviews_sentiment_neutral_${token}` },
-      { text: "Mecontent", callback_data: `reviews_sentiment_negative_${token}` },
+      { text: "😊 Content", callback_data: `reviews_sentiment_positive_${token}` },
+      { text: "😐 Neutre", callback_data: `reviews_sentiment_neutral_${token}` },
+      { text: "😠 Mecontent", callback_data: `reviews_sentiment_negative_${token}` },
     ],
-    [{ text: "Retour", callback_data: `reviews_filters_${token}` }],
-    [{ text: "Menu principal", callback_data: "main_menu" }],
+    [{ text: "◀️ Retour", callback_data: `reviews_filters_${token}` }],
+    [{ text: "🏠 Menu principal", callback_data: "main_menu" }],
   ];
 }
 
@@ -290,11 +290,11 @@ function reviewStatusKeyboard(filter: ReviewFilter = {}): TelegramInlineButton[]
   const token = createReviewFilterToken(filter);
   return [
     [
-      { text: "Publies", callback_data: `reviews_status_published_${token}` },
-      { text: "Archives", callback_data: `reviews_status_archived_${token}` },
+      { text: "✅ Publies", callback_data: `reviews_status_published_${token}` },
+      { text: "📁 Archives", callback_data: `reviews_status_archived_${token}` },
     ],
-    [{ text: "Retour", callback_data: `reviews_filters_${token}` }],
-    [{ text: "Menu principal", callback_data: "main_menu" }],
+    [{ text: "◀️ Retour", callback_data: `reviews_filters_${token}` }],
+    [{ text: "🏠 Menu principal", callback_data: "main_menu" }],
   ];
 }
 
@@ -359,6 +359,7 @@ function createReviewTagToken(companyId: unknown, tag: string) {
     .digest("hex")
     .slice(0, 20);
   reviewTagTokens.set(token, tag);
+  void putTelegramState(`token:review-tag:${token}`, tag, TOKEN_TTL_MS / 1000);
   return token;
 }
 
@@ -371,6 +372,7 @@ function createReviewFilterToken(filter: ReviewFilter = {}) {
     .digest("hex")
     .slice(0, 20);
   reviewFilterTokens.set(token, filter);
+  void putTelegramState(`token:review-filter:${token}`, filter, TOKEN_TTL_MS / 1000);
   return token;
 }
 
@@ -384,15 +386,18 @@ function createQrActionToken(qrCodeId: unknown, qrCodeLabel: unknown) {
     qrCodeId: String(qrCodeId),
     qrCodeLabel: String(qrCodeLabel || "QR Code"),
   });
+  void putTelegramState(`token:qr-action:${token}`, { qrCodeId: String(qrCodeId), qrCodeLabel: String(qrCodeLabel || "QR Code") }, TOKEN_TTL_MS / 1000);
   return token;
 }
 
-function getQrActionToken(tokenOrId: string) {
-  return qrActionTokens.get(tokenOrId) || { qrCodeId: tokenOrId, qrCodeLabel: "" };
+async function getQrActionToken(tokenOrId: string) {
+  return (await getTelegramState<{ qrCodeId: string; qrCodeLabel: string }>(`token:qr-action:${tokenOrId}`))
+    || qrActionTokens.get(tokenOrId)
+    || { qrCodeId: tokenOrId, qrCodeLabel: "" };
 }
 
-function getReviewFilterToken(token: string) {
-  return reviewFilterTokens.get(token) || {};
+async function getReviewFilterToken(token: string) {
+  return (await getTelegramState<ReviewFilter>(`token:review-filter:${token}`)) || reviewFilterTokens.get(token) || {};
 }
 
 function resetReviewFilterPage(filter: ReviewFilter): ReviewFilter {
@@ -533,7 +538,7 @@ async function createGuestQrCode(chatId: number, email: string, qrName: string) 
   await sendTelegramKeyboard(
     String(chatId),
     "Que voulez-vous faire ensuite ?",
-    navigationKeyboard(undefined, [[{ text: "Creer un autre QR", callback_data: "guest_create_qr" }]]),
+    navigationKeyboard(undefined, [[{ text: "➕ Creer un autre QR", callback_data: "guest_create_qr" }]]),
   );
 }
 
@@ -565,7 +570,7 @@ async function verifyTelegramLinkToken(token: string) {
   return String(linkToken.user);
 }
 
-export async function initializeTelegramBot() {
+export async function initializeTelegramBot(options: { polling?: boolean } = {}) {
   const token =
     env.telegram.botToken || (await readFileSecret("telegramBotToken"));
 
@@ -574,10 +579,8 @@ export async function initializeTelegramBot() {
     return null;
   }
 
-  bot = new TelegramBotConstructor(
-    token,
-    env.telegram.webhookUrl ? { polling: false } : { polling: true },
-  );
+  const usePolling = options.polling ?? !env.telegram.webhookUrl;
+  bot = new TelegramBotConstructor(token, usePolling ? { polling: true } : { polling: false });
 
   bot.on("polling_error", (error) => console.error("[telegram:polling:error]", error));
   bot.on("webhook_error", (error) => console.error("[telegram:webhook:error]", error));
@@ -692,8 +695,8 @@ async function handleStart(msg: TelegramMessage) {
       String(chatId),
       "<b>Bienvenue sur QrFeedback</b>\n\nCreez un QR rapidement ou connectez votre compte pour gerer avis, QR codes et notifications depuis Telegram.",
       [
-        [{ text: "Creer un QR", callback_data: "guest_create_qr" }],
-        [frontendButton("Se connecter a QrFeedback", "/login?redirect=/settings")],
+        [{ text: "➕ Creer un QR", callback_data: "guest_create_qr" }],
+        [frontendButton("🔗 Se connecter a QrFeedback", "/login?redirect=/settings")],
       ],
     );
     return;
@@ -790,7 +793,7 @@ async function startQrCreation(chatId: number, telegramUserId?: number) {
 
   const dbUser = await findUserByTelegram(chatId);
   if (!dbUser) {
-    setUserContext(chatId, telegramUserId, "guest_create_email");
+    await setUserContext(chatId, telegramUserId, "guest_create_email");
     await sendTelegramKeyboard(
       String(chatId),
       "<b>Creer un QR</b>\n\nTapez votre adresse email.",
@@ -799,7 +802,7 @@ async function startQrCreation(chatId: number, telegramUserId?: number) {
     return;
   }
 
-  setUserContext(chatId, telegramUserId, "creating_qr_name");
+  await setUserContext(chatId, telegramUserId, "creating_qr_name");
   await sendTelegramKeyboard(
     String(chatId),
     "<b>Creer un QR</b>\n\n1/3 - Tapez le nom du QR code.\n\nExemples: Table 1, Caisse, Chambre 204.",
@@ -831,8 +834,8 @@ async function sendQrCodes(chatId: number, messageId?: number, page = 1) {
 
   if (pageQrCodes.length === 0) {
     const emptyKeyboardExtra: TelegramInlineButton[][] = [
-      ...(safePage > 1 ? [[{ text: "Precedent", callback_data: `my_qr_codes_page_${safePage - 1}` }]] : []),
-      [{ text: "Creer un QR", callback_data: "create_qr" }],
+      ...(safePage > 1 ? [[{ text: "◀️ Precedent", callback_data: `my_qr_codes_page_${safePage - 1}` }]] : []),
+      [{ text: "➕ Creer un QR", callback_data: "create_qr" }],
     ];
     await sendTelegramKeyboard(
       String(chatId),
@@ -861,13 +864,13 @@ async function sendQrCodes(chatId: number, messageId?: number, page = 1) {
   }
   if (safePage > 1 || hasNextPage) {
     const row: TelegramInlineButton[] = [];
-    if (safePage > 1) row.push({ text: "Precedent", callback_data: `my_qr_codes_page_${safePage - 1}` });
-    if (hasNextPage) row.push({ text: "Suivant", callback_data: `my_qr_codes_page_${safePage + 1}` });
+    if (safePage > 1) row.push({ text: "◀️ Precedent", callback_data: `my_qr_codes_page_${safePage - 1}` });
+    if (hasNextPage) row.push({ text: "Suivant ▶️", callback_data: `my_qr_codes_page_${safePage + 1}` });
     keyboard.push(row);
   }
-  keyboard.push([{ text: "Creer un QR", callback_data: "create_qr" }]);
-  keyboard.push([{ text: "Retour", callback_data: "main_menu" }]);
-  keyboard.push([{ text: "Menu principal", callback_data: "main_menu" }]);
+  keyboard.push([{ text: "➕ Creer un QR", callback_data: "create_qr" }]);
+  keyboard.push([{ text: "◀️ Retour", callback_data: "main_menu" }]);
+  keyboard.push([{ text: "🏠 Menu principal", callback_data: "main_menu" }]);
 
   if (messageId) {
     await editTelegramMessage(String(chatId), messageId, text, keyboard);
@@ -1039,7 +1042,7 @@ async function sendReviewTagFilter(chatId: number, messageId: number, filter: Re
 }
 
 async function askReviewTagSearch(chatId: number, telegramUserId: number | undefined, filter: ReviewFilter = {}) {
-  setUserContext(chatId, telegramUserId, "review_search_tag", { qrName: createReviewFilterToken(filter) });
+  await setUserContext(chatId, telegramUserId, "review_search_tag", { qrName: createReviewFilterToken(filter) });
   await sendTelegramKeyboard(
     String(chatId),
     "Tapez le tag a rechercher.",
@@ -1054,9 +1057,9 @@ async function searchReviewsByTag(chatId: number, telegramUserId: number | undef
     return;
   }
 
-  const context = getUserContext(chatId, telegramUserId);
-  const filter = context?.qrName ? getReviewFilterToken(context.qrName) : {};
-  clearUserContext(chatId, telegramUserId);
+  const context = await getUserContext(chatId, telegramUserId);
+  const filter = context?.qrName ? await getReviewFilterToken(context.qrName) : {};
+  await clearUserContext(chatId, telegramUserId);
   await sendReviews(chatId, undefined, { ...resetReviewFilterPage(filter), tag: cleanTag });
 }
 
@@ -1155,7 +1158,7 @@ async function handleSearchPrompt(msg: TelegramMessage) {
     return;
   }
 
-  setUserContext(msg.chat.id, msg.from?.id, "search_reviews");
+  await setUserContext(msg.chat.id, msg.from?.id, "search_reviews");
   await sendTelegramKeyboard(
     String(msg.chat.id),
     'Tapez votre recherche, par exemple "qualite du service".',
@@ -1183,7 +1186,7 @@ async function searchReviewsForChat(chatId: number, query: string, filter: Revie
   }
 
   if (!query) {
-    setUserContext(chatId, undefined, "search_reviews");
+    await setUserContext(chatId, undefined, "search_reviews");
     await sendTelegramKeyboard(
       String(chatId),
       'Tapez votre recherche, par exemple "qualite du service".',
@@ -1245,7 +1248,7 @@ async function handleDefaultMessage(msg: TelegramMessage) {
     return;
   }
 
-  const userContext = getUserContext(chatId, msg.from?.id);
+  const userContext = await getUserContext(chatId, msg.from?.id);
 
   if (userContext?.state === "guest_create_email") {
     const email = text.trim().toLowerCase();
@@ -1255,12 +1258,12 @@ async function handleDefaultMessage(msg: TelegramMessage) {
     }
 
     if (userContext.qrName) {
-      clearUserContext(chatId, msg.from?.id);
+      await clearUserContext(chatId, msg.from?.id);
       await createGuestQrCode(chatId, email, userContext.qrName);
       return;
     }
 
-    setUserContext(chatId, msg.from?.id, "guest_create_label", { email });
+    await setUserContext(chatId, msg.from?.id, "guest_create_label", { email });
     await bot.sendMessage(chatId, "Merci. Tapez maintenant le nom du QR code.");
     return;
   }
@@ -1272,7 +1275,7 @@ async function handleDefaultMessage(msg: TelegramMessage) {
       return;
     }
 
-    clearUserContext(chatId, msg.from?.id);
+    await clearUserContext(chatId, msg.from?.id);
     await createGuestQrCode(chatId, userContext.email || "", qrName);
     return;
   }
@@ -1284,7 +1287,7 @@ async function handleDefaultMessage(msg: TelegramMessage) {
       return;
     }
 
-    setUserContext(chatId, msg.from?.id, "creating_qr_name", { qrName });
+    await setUserContext(chatId, msg.from?.id, "creating_qr_name", { qrName });
     await sendTelegramKeyboard(
       String(chatId),
       `<b>Creer un QR</b>\n\n2/3 - Activer les notifications email pour <b>${escapeHtml(qrName)}</b> ?`,
@@ -1316,8 +1319,8 @@ async function handleDefaultMessage(msg: TelegramMessage) {
   }
 
   if (userContext?.state === "search_reviews") {
-    const filter = userContext.qrName ? getReviewFilterToken(userContext.qrName) : {};
-    clearUserContext(chatId, msg.from?.id);
+    const filter = userContext.qrName ? await getReviewFilterToken(userContext.qrName) : {};
+    await clearUserContext(chatId, msg.from?.id);
     await searchReviewsForChat(chatId, text.trim(), filter);
     return;
   }
@@ -1354,7 +1357,7 @@ async function handleCallbackQuery(query: TelegramCallbackQuery) {
     }
 
     if (data === "guest_create_qr") {
-      setUserContext(chatId, query.from.id, "guest_create_email");
+      await setUserContext(chatId, query.from.id, "guest_create_email");
       await bot.sendMessage(chatId, "Pour creer votre QR code, tapez votre adresse email.");
       await answerCallbackQuery(query.id);
       return;
@@ -1364,7 +1367,7 @@ async function handleCallbackQuery(query: TelegramCallbackQuery) {
 
     if (!dbUser) {
       if (data === "create_qr") {
-        setUserContext(chatId, query.from.id, "guest_create_email");
+        await setUserContext(chatId, query.from.id, "guest_create_email");
         await bot.sendMessage(chatId, "Pour creer votre QR code, tapez votre adresse email.");
         await answerCallbackQuery(query.id);
         return;
@@ -1404,7 +1407,7 @@ async function routeConnectedCallback(
   if (data === "dashboard_stats") return sendStatsForChat(chatId, messageId);
   if (data === "ai_overview") return sendAiOverviewForChat(chatId, messageId);
   if (data === "search_reviews") return handleSearchCallback(chatId, telegramUserId);
-  if (data.startsWith("search_reviews_")) return handleSearchCallback(chatId, telegramUserId, getReviewFilterToken(data.replace("search_reviews_", "")));
+  if (data.startsWith("search_reviews_")) return handleSearchCallback(chatId, telegramUserId, await getReviewFilterToken(data.replace("search_reviews_", "")));
   if (data === "settings") return sendSettings(chatId, messageId);
   if (data === "toggle_company_email") return toggleCompanyNotification(chatId, messageId, "email");
   if (data === "toggle_company_telegram") return toggleCompanyNotification(chatId, messageId, "telegram");
@@ -1417,7 +1420,7 @@ async function routeConnectedCallback(
   }
 
   if (data.startsWith("reviews_filters_")) {
-    const baseFilter = getReviewFilterToken(data.replace("reviews_filters_", ""));
+    const baseFilter = await getReviewFilterToken(data.replace("reviews_filters_", ""));
     const dbUser = await findUserByTelegram(chatId);
     const filter = dbUser ? await hydrateReviewFilter(baseFilter, dbUser.company) : baseFilter;
     await editTelegramMessage(
@@ -1429,53 +1432,53 @@ async function routeConnectedCallback(
     return;
   }
   if (data.startsWith("reviews_page_")) {
-    return sendReviews(chatId, messageId, getReviewFilterToken(data.replace("reviews_page_", "")));
+    return sendReviews(chatId, messageId, await getReviewFilterToken(data.replace("reviews_page_", "")));
   }
-  if (data.startsWith('reviews_export_')) return exportReviewsForChat(chatId, getReviewFilterToken(data.replace('reviews_export_', '')));
+  if (data.startsWith('reviews_export_')) return exportReviewsForChat(chatId, await getReviewFilterToken(data.replace('reviews_export_', '')));
   const ratingMatch = data.match(/^reviews_rating_([1-5])_(.+)$/);
   if (ratingMatch) {
-    const filter = resetReviewFilterPage(getReviewFilterToken(ratingMatch[2] || ""));
+    const filter = resetReviewFilterPage(await getReviewFilterToken(ratingMatch[2] || ""));
     return sendReviews(chatId, messageId, { ...filter, rating: Number(ratingMatch[1]) as 1 | 2 | 3 | 4 | 5 });
   }
   if (data.startsWith("reviews_rating_")) {
-    const filter = getReviewFilterToken(data.replace("reviews_rating_", ""));
+    const filter = await getReviewFilterToken(data.replace("reviews_rating_", ""));
     await editTelegramMessage(String(chatId), messageId, "<b>Score</b>\n\nChoisissez une note.", reviewRatingKeyboard(filter));
     return;
   }
   const sentimentMatch = data.match(/^reviews_sentiment_(positive|neutral|negative)_(.+)$/);
   if (sentimentMatch) {
-    const filter = resetReviewFilterPage(getReviewFilterToken(sentimentMatch[2] || ""));
+    const filter = resetReviewFilterPage(await getReviewFilterToken(sentimentMatch[2] || ""));
     return sendReviews(chatId, messageId, { ...filter, sentiment: sentimentMatch[1] as ReviewFilter["sentiment"] });
   }
   if (data.startsWith("reviews_sentiment_")) {
-    const filter = getReviewFilterToken(data.replace("reviews_sentiment_", ""));
+    const filter = await getReviewFilterToken(data.replace("reviews_sentiment_", ""));
     await editTelegramMessage(String(chatId), messageId, "<b>Sentiment</b>\n\nChoisissez le ressenti client.", reviewSentimentKeyboard(filter));
     return;
   }
   const statusMatch = data.match(/^reviews_status_(published|archived)_(.+)$/);
   if (statusMatch) {
-    const filter = resetReviewFilterPage(getReviewFilterToken(statusMatch[2] || ""));
+    const filter = resetReviewFilterPage(await getReviewFilterToken(statusMatch[2] || ""));
     return sendReviews(chatId, messageId, { ...filter, moderationStatus: statusMatch[1] as ReviewFilter["moderationStatus"] });
   }
   if (data.startsWith("reviews_status_")) {
-    const filter = getReviewFilterToken(data.replace("reviews_status_", ""));
+    const filter = await getReviewFilterToken(data.replace("reviews_status_", ""));
     await editTelegramMessage(String(chatId), messageId, "<b>Statut</b>\n\nChoisissez le statut.", reviewStatusKeyboard(filter));
     return;
   }
-  if (data.startsWith("reviews_by_qr_")) return sendReviewQrFilter(chatId, messageId, getReviewFilterToken(data.replace("reviews_by_qr_", "")));
-  if (data.startsWith("reviews_by_tag_")) return sendReviewTagFilter(chatId, messageId, getReviewFilterToken(data.replace("reviews_by_tag_", "")));
-  if (data.startsWith("reviews_search_tag_")) return askReviewTagSearch(chatId, telegramUserId, getReviewFilterToken(data.replace("reviews_search_tag_", "")));
+  if (data.startsWith("reviews_by_qr_")) return sendReviewQrFilter(chatId, messageId, await getReviewFilterToken(data.replace("reviews_by_qr_", "")));
+  if (data.startsWith("reviews_by_tag_")) return sendReviewTagFilter(chatId, messageId, await getReviewFilterToken(data.replace("reviews_by_tag_", "")));
+  if (data.startsWith("reviews_search_tag_")) return askReviewTagSearch(chatId, telegramUserId, await getReviewFilterToken(data.replace("reviews_search_tag_", "")));
   if (data.startsWith("reviews_tag_")) {
     const [, tagToken, filterToken] = data.match(/^reviews_tag_([^_]+)_(.+)$/) || [];
-    const tag = reviewTagTokens.get(tagToken || "");
+    const tag = (await getTelegramState<string>(`token:review-tag:${tagToken || ""}`)) || reviewTagTokens.get(tagToken || "");
     if (!tag) {
-      await sendReviewTagFilter(chatId, messageId, getReviewFilterToken(filterToken || ""));
+      await sendReviewTagFilter(chatId, messageId, await getReviewFilterToken(filterToken || ""));
       return;
     }
-    return sendReviews(chatId, messageId, { ...resetReviewFilterPage(getReviewFilterToken(filterToken || "")), tag });
+    return sendReviews(chatId, messageId, { ...resetReviewFilterPage(await getReviewFilterToken(filterToken || "")), tag });
   }
   if (data.startsWith("reviews_qr_")) {
-    return sendReviews(chatId, messageId, getReviewFilterToken(data.replace("reviews_qr_", "")));
+    return sendReviews(chatId, messageId, await getReviewFilterToken(data.replace("reviews_qr_", "")));
   }
 
   if (data.startsWith("qr_detail_")) return handleQrDetailCallback(chatId, messageId, data.replace("qr_detail_", ""));
@@ -1485,7 +1488,7 @@ async function routeConnectedCallback(
   if (data.startsWith("qr_toggle_telegram_")) return toggleQrNotification(chatId, messageId, data.replace("qr_toggle_telegram_", ""), "telegram");
   if (data.startsWith("qr_reviews_")) return sendReviews(chatId, messageId, { qrCodeId: data.replace("qr_reviews_", "") });
   if (data.startsWith("qr_ai_")) {
-    const qrAction = getQrActionToken(data.replace("qr_ai_", ""));
+    const qrAction = await getQrActionToken(data.replace("qr_ai_", ""));
     return sendAiOverviewForChat(chatId, messageId, qrAction.qrCodeId, qrAction.qrCodeLabel);
   }
   if (data.startsWith("copy_link_")) return handleCopyLinkCallback(chatId, data.replace("copy_link_", ""));
@@ -1497,13 +1500,13 @@ async function routeConnectedCallback(
 }
 
 async function handleQrEmailChoice(chatId: number, telegramUserId: number | undefined, enabled: boolean) {
-  const context = getUserContext(chatId, telegramUserId);
+  const context = await getUserContext(chatId, telegramUserId);
   if (!context?.qrName) {
     await startQrCreation(chatId, telegramUserId);
     return;
   }
 
-  setUserContext(chatId, telegramUserId, "creating_qr_name", {
+  await setUserContext(chatId, telegramUserId, "creating_qr_name", {
     qrName: context.qrName,
     emailEnabled: enabled,
   });
@@ -1526,19 +1529,19 @@ async function handleQrTelegramChoice(
   telegramUserId: number | undefined,
   enabled: boolean,
 ) {
-  const context = getUserContext(chatId, telegramUserId);
+  const context = await getUserContext(chatId, telegramUserId);
   if (!context?.qrName) {
     await startQrCreation(chatId, telegramUserId);
     return;
   }
 
-  clearUserContext(chatId, telegramUserId);
+  await clearUserContext(chatId, telegramUserId);
   await createConnectedQr(chatId, context.qrName, context.emailEnabled !== false, enabled);
 }
 
 async function handleSearchCallback(chatId: number, telegramUserId?: number, filter: ReviewFilter = {}) {
   const token = createReviewFilterToken(filter);
-  setUserContext(chatId, telegramUserId, "search_reviews", { qrName: token });
+  await setUserContext(chatId, telegramUserId, "search_reviews", { qrName: token });
   await sendTelegramKeyboard(
     String(chatId),
     'Tapez votre recherche, par exemple "qualite du service".',
@@ -1609,16 +1612,16 @@ Lien:
 
   await editTelegramMessage(String(chatId), messageId, text, [
     [
-      { text: "PNG", callback_data: `qr_download_png_${qrId}` },
-      { text: "PDF", callback_data: `qr_download_pdf_${qrId}` },
+      { text: "🖼️ PNG", callback_data: `qr_download_png_${qrId}` },
+      { text: "📄 PDF", callback_data: `qr_download_pdf_${qrId}` },
     ],
     [
-      { text: `${prefs?.emailEnabled !== false ? "Desactiver" : "Activer"} Email`, callback_data: `qr_toggle_email_${qrId}` },
-      { text: `${prefs?.telegramEnabled !== false ? "Desactiver" : "Activer"} Telegram`, callback_data: `qr_toggle_telegram_${qrId}` },
+      { text: `${prefs?.emailEnabled !== false ? "🔕 Desactiver" : "📧 Activer"} Email`, callback_data: `qr_toggle_email_${qrId}` },
+      { text: `${prefs?.telegramEnabled !== false ? "🔕 Desactiver" : "💬 Activer"} Telegram`, callback_data: `qr_toggle_telegram_${qrId}` },
     ],
-    [{ text: "Mes avis", callback_data: `qr_reviews_${qrId}` }],
-    [{ text: "Analyse IA", callback_data: `qr_ai_${qrAiToken}` }],
-    [{ text: "Copier le lien", callback_data: `copy_link_${qrId}` }],
+    [{ text: "⭐ Mes avis", callback_data: `qr_reviews_${qrId}` }],
+    [{ text: "🤖 Analyse IA", callback_data: `qr_ai_${qrAiToken}` }],
+    [{ text: "🔗 Copier le lien", callback_data: `copy_link_${qrId}` }],
     ...navigationKeyboard("my_qr_codes"),
   ]);
 }
@@ -1668,8 +1671,8 @@ async function sendQrFollowUpKeyboard(chatId: number, qrId: string, qrLabel = "Q
     String(chatId),
     "Que voulez-vous voir pour ce QR ?",
     navigationKeyboard(`qr_detail_${qrId}`, [
-      [{ text: "Mes avis", callback_data: `qr_reviews_${qrId}` }],
-      [{ text: "Analyse IA", callback_data: `qr_ai_${qrAiToken}` }],
+      [{ text: "⭐ Mes avis", callback_data: `qr_reviews_${qrId}` }],
+      [{ text: "🤖 Analyse IA", callback_data: `qr_ai_${qrAiToken}` }],
     ]),
   );
 }
@@ -1766,7 +1769,7 @@ async function updateReviewModeration(
 }
 
 async function askReviewTag(chatId: number, telegramUserId: number | undefined, reviewId: string) {
-  setUserContext(chatId, telegramUserId, "review_add_tag", { reviewId });
+  await setUserContext(chatId, telegramUserId, "review_add_tag", { reviewId });
   await sendTelegramKeyboard(
     String(chatId),
     "Tapez un ou plusieurs tags separes par des virgules.",
@@ -1798,13 +1801,13 @@ async function addReviewTags(
     { _id: reviewId, company: context.company._id },
     { $addToSet: { tags: { $each: tags } } },
   );
-  clearUserContext(chatId, telegramUserId);
+  await clearUserContext(chatId, telegramUserId);
   await bot.sendMessage(chatId, "Tags ajoutes.");
   await sendReviews(chatId);
 }
 
 async function askReviewReply(chatId: number, telegramUserId: number | undefined, reviewId: string) {
-  setUserContext(chatId, telegramUserId, "review_reply", { reviewId });
+  await setUserContext(chatId, telegramUserId, "review_reply", { reviewId });
   await sendTelegramKeyboard(
     String(chatId),
     "Tapez la note interne a enregistrer pour cet avis.",
@@ -1832,7 +1835,7 @@ async function replyToReview(
     { _id: reviewId, company: context.company._id },
     { internalNote },
   );
-  clearUserContext(chatId, telegramUserId);
+  await clearUserContext(chatId, telegramUserId);
   await bot.sendMessage(chatId, "Note interne enregistree.");
   await sendReviews(chatId);
 }
@@ -1848,7 +1851,7 @@ async function createConnectedQr(
   try {
     const context = await findTelegramUserCompany(chatId);
     if (!context) {
-      setUserContext(chatId, undefined, "guest_create_email", { qrName });
+      await setUserContext(chatId, undefined, "guest_create_email", { qrName });
       await bot.sendMessage(chatId, `Pour creer le QR code "${escapeHtml(qrName)}", tapez votre adresse email.`);
       return;
     }
@@ -1885,9 +1888,9 @@ Lien:
       String(chatId),
       "QR pret. Vous pouvez aussi le retrouver dans Mes QR codes.",
       navigationKeyboard("my_qr_codes", [
-        [{ text: "Mes avis", callback_data: `qr_reviews_${qrCode._id}` }],
-        [{ text: "Analyse IA", callback_data: `qr_ai_${createQrActionToken(qrCode._id, qrCode.label || qrCode.slug || "QR Code")}` }],
-        [{ text: "Creer un autre QR", callback_data: "create_qr" }],
+        [{ text: "⭐ Mes avis", callback_data: `qr_reviews_${qrCode._id}` }],
+        [{ text: "🤖 Analyse IA", callback_data: `qr_ai_${createQrActionToken(qrCode._id, qrCode.label || qrCode.slug || "QR Code")}` }],
+        [{ text: "➕ Creer un autre QR", callback_data: "create_qr" }],
         [frontendButton("Ouvrir le dashboard", "/dashboard/qr-codes")],
       ]),
     );

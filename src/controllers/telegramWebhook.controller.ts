@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
-import { processTelegramUpdate } from "../services/telegramBot.service.js";
 import { env } from "../config/env.js";
 import { readFileSecret } from "../services/fileSecret.service.js";
+import { publishOutboxEvent } from "../services/outbox.service.js";
 
 let warnedMissingSecret = false;
 let warnedInvalidSecret = false;
@@ -77,7 +77,12 @@ export async function handleTelegramWebhook(req: Request, res: Response) {
       hasCallback: Boolean(update.callback_query),
     });
 
-    processTelegramUpdate(update);
+    await publishOutboxEvent({
+      type: "telegram.update",
+      aggregateId: String(update.update_id),
+      payload: { update },
+      idempotencyKey: `telegram:update:${update.update_id}`,
+    });
 
     res.json({ ok: true });
   } catch (error) {

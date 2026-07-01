@@ -9,6 +9,7 @@ router.use(requireAuth);
 
 router.get('/reviews', asyncHandler(dashboardController.getReviews));
 router.patch('/reviews/:reviewId/moderation', asyncHandler(dashboardController.updateReviewModeration));
+router.post('/reviews/:reviewId/ai-suggest-reply', asyncHandler(dashboardController.suggestReply));
 router.get('/stats', asyncHandler(dashboardController.getStats));
 router.get('/qr-trends', asyncHandler(dashboardController.getQrTrends));
 router.get('/monthly-evolution', asyncHandler(dashboardController.getMonthlyEvolution));
@@ -17,6 +18,8 @@ router.get('/feedback-form-config', asyncHandler(dashboardController.getFeedback
 router.patch('/feedback-form-config', asyncHandler(dashboardController.updateFeedbackFormConfig));
 router.get('/notification-preferences', asyncHandler(dashboardController.getNotificationPreferences));
 router.patch('/notification-preferences', asyncHandler(dashboardController.updateNotificationPreferences));
+router.get('/review-redirect-config', asyncHandler(dashboardController.getReviewRedirectConfig));
+router.patch('/review-redirect-config', asyncHandler(dashboardController.updateReviewRedirectConfig));
 router.patch('/rating-goal', asyncHandler(dashboardController.updateRatingGoal));
 router.get('/ai/overview', asyncHandler(dashboardController.getAiOverview));
 router.get('/ai/search', asyncHandler(dashboardController.searchAiReviews));

@@ -3,7 +3,7 @@ import type { IUser } from "../models/User.js";
 import type { ICompany } from "../models/Company.js";
 import type { ICompanyQrCode } from "../models/CompanyQrCode.js";
 import type { IReview } from "../models/Review.js";
-import { sendMail } from "./mail.service.js";
+import { sendTemplateMail } from "./notificationTemplate.service.js";
 import { sendTelegram } from "./telegram.service.js";
 import { env } from "../config/env.js";
 
@@ -83,10 +83,14 @@ async function sendEmailReviewNotification(
   company: HydratedDocument<ICompany>,
   review: HydratedDocument<IReview>,
 ): Promise<NotificationStatus> {
-  await sendMail({
+  await sendTemplateMail({
+    name: "review-new-user",
     to: user.email,
-    subject: `Nouvel avis pour ${company.name}`,
-    html: buildReviewEmailHtml(company, review),
+    variables: {
+      companyName: company.name,
+      rating: review.rating,
+      serviceFeedback: review.serviceFeedback || "Sans commentaire",
+    },
   });
 
   return {
