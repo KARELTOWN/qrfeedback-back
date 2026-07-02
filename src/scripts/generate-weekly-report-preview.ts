@@ -74,7 +74,7 @@ function qrCard(doc: PDFKit.PDFDocument, label: string, reviews: number, rating:
   doc.y = y + 96;
 }
 
-const doc = new PDFDocument({ size: 'A4', margin: 48, info: { Title: 'Bilan hebdomadaire QR Feedback - aperçu' } });
+const doc = new PDFDocument({ size: 'A4', margin: 48, info: { Title: 'Bilan hebdomadaire Opinbase - aperçu' } });
 doc.pipe(createWriteStream(outputPath));
 
 doc.rect(0, 0, 595, 842).fillColor(palette.panel).fill();

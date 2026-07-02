@@ -33,15 +33,15 @@ function question(prompt: string): Promise<string> {
 }
 
 async function setupTelegramBot() {
-  console.log("🤖 Configuration du bot Telegram QrFeedback\n");
+  console.log("🤖 Configuration du bot Telegram Opinbase\n");
 
   try {
     // 1. Obtenir le token du bot
-    let botToken = env.telegram.botToken;
+    let botToken = env.telegram.botToken || (await readFileSecret("telegramBotToken"));
 
     if (!botToken) {
       console.log(
-        "❌ Token du bot non trouvé dans les variables d'environnement",
+        "❌ Token du bot non trouvé dans les variables d'environnement ni dans les secrets fichier",
       );
       botToken = await question("\n📝 Entrez votre token Telegram Bot: ");
 

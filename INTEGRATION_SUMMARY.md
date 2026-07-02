@@ -1,4 +1,4 @@
-# 📱 Résumé - Intégration Telegram QrFeedback
+# 📱 Résumé - Intégration Telegram Opinbase
 
 ## ✅ Étapes complétées
 

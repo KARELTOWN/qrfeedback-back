@@ -89,10 +89,10 @@ export async function generateUserPassword(userId: string) {
     name: 'admin-password-reset',
     to: user.email,
     variables: { password },
-    subject: 'Nouveau mot de passe QR Feedback',
+    subject: 'Nouveau mot de passe Opinbase',
     html: `
       <p>Bonjour,</p>
-      <p>Un nouveau mot de passe a ete genere pour votre compte QR Feedback.</p>
+      <p>Un nouveau mot de passe a ete genere pour votre compte Opinbase.</p>
       <p style="font-size: 20px; font-weight: 700;">${password}</p>
       <p>Connectez-vous puis changez ce mot de passe depuis vos reglages.</p>
     `
