@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: QR Feedback API
+  title: Opinbase API
   version: 1.0.0
   description: API gratuite de collecte d'avis par QR code, avec notifications email et Telegram.
 servers:

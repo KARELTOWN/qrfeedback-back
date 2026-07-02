@@ -1,6 +1,6 @@
-# 🤖 Guide d'intégration Telegram - QrFeedback
+# 🤖 Guide d'intégration Telegram - Opinbase
 
-Ce guide vous explique comment configurer et utiliser le bot Telegram QrFeedback dans votre application.
+Ce guide vous explique comment configurer et utiliser le bot Telegram Opinbase dans votre application.
 
 ## 📋 Table des matières
 
@@ -25,8 +25,8 @@ Ce guide vous explique comment configurer et utiliser le bot Telegram QrFeedback
 1. Ouvrez Telegram et recherchez **@BotFather**
 2. Démarrez une conversation (`/start`)
 3. Tapez `/newbot` et suivez les instructions:
-   - Donnez un nom: `QrFeedback`
-   - Donnez un username unique: `QrFeedback_Bot` (ou votre choix)
+   - Donnez un nom: `Opinbase`
+   - Donnez un username unique: `Opinbasebot` (ou votre choix)
 
 4. BotFather vous donnera un **token**. Sauvegardez-le!
 
@@ -104,7 +104,7 @@ Le mode polling est activé par défaut en développement (plus simple, pas beso
 npm run dev
 ```
 
-2. Recherchez votre bot sur Telegram (@QrFeedback_Bot)
+2. Recherchez votre bot sur Telegram (@Opinbasebot)
 
 3. Tapez `/start`
 

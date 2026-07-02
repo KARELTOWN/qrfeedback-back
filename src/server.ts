@@ -9,5 +9,5 @@ await seedSuperAdmin();
 await initializeTelegramBot();
 
 app.listen(env.port, () => {
-  console.log(`QR Feedback API listening on port ${env.port}`);
+  console.log(`Opinbase API listening on port ${env.port}`);
 });

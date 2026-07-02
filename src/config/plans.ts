@@ -1,7 +1,7 @@
 export const plans = [
   {
     code: 'free_unlimited',
-    label: 'QrFeedback gratuit',
+    label: 'Opinbase gratuit',
     emailNotifications: 0,
     messages: 0,
     priceFcfa: 0,

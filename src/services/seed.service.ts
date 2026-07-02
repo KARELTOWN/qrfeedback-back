@@ -11,7 +11,7 @@ export async function seedSuperAdmin() {
     { slug: 'qr-feedback-admin' },
     {
       $setOnInsert: {
-        name: 'QR Feedback Admin',
+        name: 'Opinbase Admin',
         slug: 'qr-feedback-admin',
         email: SUPERADMIN_EMAIL,
         feedbackUrl: `${env.frontendUrl}/admin`

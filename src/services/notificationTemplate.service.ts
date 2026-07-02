@@ -30,12 +30,12 @@ html
           table(role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(15,42,67,.10)")
             tr
               td(style="padding:28px 32px;background:#0f766e;color:#fff")
-                div(style="font-size:20px;font-weight:700") QrFeedback
+                div(style="font-size:20px;font-weight:700") Opinbase
                 div(style="margin-top:6px;font-size:14px;opacity:.9")= title
             tr
               td(style="padding:32px;font-size:16px;line-height:1.65")!= bodyHtml
             tr
-              td(style="padding:18px 32px;background:#f8fafc;color:#64748b;font-size:12px") Message envoyé par QrFeedback.`;
+              td(style="padding:18px 32px;background:#f8fafc;color:#64748b;font-size:12px") Message envoyé par Opinbase.`;
 
 function escapeHtml(value: unknown) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#39;");

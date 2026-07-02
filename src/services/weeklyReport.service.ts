@@ -239,7 +239,7 @@ export async function buildWeeklyReportPdf(
   const verbatims = buildVerbatims(allReviews);
 
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 48, info: { Title: 'Bilan hebdomadaire QR Feedback' } });
+    const doc = new PDFDocument({ size: 'A4', margin: 48, info: { Title: 'Bilan hebdomadaire Opinbase' } });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('error', reject);

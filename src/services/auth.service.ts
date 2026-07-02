@@ -154,7 +154,7 @@ async function sendOtp(user: HydratedDocument<IUser>, purpose: OtpPurpose) {
   user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
   await user.save();
 
-  const subject = purpose === 'reset-password' ? 'Code de reinitialisation QR Feedback' : 'Code de verification QR Feedback';
+  const subject = purpose === 'reset-password' ? 'Code de reinitialisation Opinbase' : 'Code de verification Opinbase';
   const resetLink = `${env.frontendUrl}/forgot-password?email=${encodeURIComponent(user.email)}&step=code`;
   await sendTemplateMail({
     name: 'auth-otp',

@@ -73,7 +73,7 @@ export async function registerCompany({ name, email }: RegisterCompanyInput) {
     html: `
       <p>Bonjour ${name},</p>
       <p>Votre lien de collecte est prêt : <a href="${feedbackUrl}">${feedbackUrl}</a>.</p>
-      <p>Vous recevrez les nouveaux avis par email. Connectez-vous ensuite a votre espace QrFeedback pour activer les notifications Telegram.</p>
+      <p>Vous recevrez les nouveaux avis par email. Connectez-vous ensuite a votre espace Opinbase pour activer les notifications Telegram.</p>
     `,
     attachments: [{ filename: `qr-code-${slug}.pdf`, content: pdf, contentType: 'application/pdf' }]
   });

@@ -68,7 +68,7 @@ export async function buildAiAnalysisPdf(
     : null;
 
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 48, info: { Title: 'Analyse IA QR Feedback' } });
+    const doc = new PDFDocument({ size: 'A4', margin: 48, info: { Title: 'Analyse IA Opinbase' } });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('error', reject);
