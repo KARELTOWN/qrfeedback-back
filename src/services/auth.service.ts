@@ -10,6 +10,7 @@ import { generateStrongPassword, hashPassword, hashToken, verifyPassword } from 
 import { generateQrDataUrl } from './qr.service.js';
 import { sendTemplateMail } from './notificationTemplate.service.js';
 import { readFileSecret } from './fileSecret.service.js';
+import { getJwtSecret } from './jwtSecret.service.js';
 
 type SignupInput = {
   companyName?: string;
@@ -54,10 +55,6 @@ type VerifyOtpInput = {
   code: string;
   purpose: OtpPurpose;
 };
-
-async function getJwtSecret() {
-  return (await readFileSecret('jwtSecret')) || env.jwtSecret;
-}
 
 /**
  * Verifies the signed payload supplied by Telegram.WebApp.initData.

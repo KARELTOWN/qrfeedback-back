@@ -3,7 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { env } from '../config/env.js';
 import { User } from '../models/User.js';
 import { HttpError } from '../utils/httpError.js';
-import { readFileSecret } from '../services/fileSecret.service.js';
+import { getJwtSecret } from '../services/jwtSecret.service.js';
 
 type JwtPayload = {
   sub: string;
@@ -16,8 +16,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const token = header.startsWith('Bearer ') ? header.slice(7) : null;
     if (!token) throw new HttpError(401, 'Authentification requise.');
 
-    const jwtSecret = (await readFileSecret('jwtSecret')) || env.jwtSecret;
-    const payload = jwt.verify(token, jwtSecret) as JwtPayload;
+    const payload = jwt.verify(token, await getJwtSecret()) as JwtPayload;
     const user = await User.findById(payload.sub).populate('company');
     if (!user) throw new HttpError(401, 'Session invalide.');
     if ((user.tokenVersion || 0) !== (payload.tokenVersion || 0)) throw new HttpError(401, 'Session invalide.');

@@ -10,11 +10,7 @@ function splitCsv(value: string | undefined) {
 }
 
 const nodeEnv = process.env.NODE_ENV || "development";
-const jwtSecret = process.env.JWT_SECRET || "dev-only-secret";
-
-if (nodeEnv === "production" && jwtSecret === "dev-only-secret") {
-  throw new Error("JWT_SECRET must be configured in production.");
-}
+const jwtSecret = process.env.JWT_SECRET || "";
 
 export const env = {
   nodeEnv,
