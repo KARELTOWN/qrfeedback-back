@@ -64,5 +64,5 @@ export const env = {
     apiKey: process.env.FASTERMESSAGE_API_KEY || "",
     baseUrl: process.env.FASTERMESSAGE_BASE_URL || "https://api.fastermessage.com",
     senderId: process.env.FASTERMESSAGE_SENDER_ID || "Opinbase",
-  },
+  }
 };
