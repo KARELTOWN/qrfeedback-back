@@ -74,6 +74,10 @@ services:
   frontend:
     build:
       context: ./front
+      args:
+        VITE_API_URL: ${VITE_API_URL:-https://api.bugreveal.com}
+        VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY:-}
+        VITE_TELEGRAM_BOT_USERNAME: ${VITE_TELEGRAM_BOT_USERNAME:-Opinbasebot}
     container_name: qrfeedback-frontend
     restart: unless-stopped
     ports:
