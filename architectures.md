@@ -1,4 +1,4 @@
-# Regles d'architecture - QR Feedback
+# Regles d'architecture - Opinbase
 
 Statut: document de reference pour le backend `back/` et le frontend `front/`.
 Toute nouvelle fonctionnalite doit respecter ces regles sauf decision technique explicite.
@@ -9,7 +9,7 @@ Ce document fixe les regles a suivre pour le reste du projet. Il couvre le backe
 
 - Le produit est WhatsApp-only pour les notifications client et les automations.
 - Le SaaS est multi-tenant: toute donnee metier doit etre scopee par `company`.
-- Le module QR Feedback existant reste stable. Les nouveaux modules doivent s'y brancher sans le refaire.
+- Le module Opinbase existant reste stable. Les nouveaux modules doivent s'y brancher sans le refaire.
 - Les modules doivent etre extensibles mais pas abstraits sans besoin reel.
 - Le code doit rester deployable simplement: build TypeScript, variables d'environnement claires, pas de dependances lourdes sans justification.
 - Les donnees sensibles sont chiffrees avant stockage.
@@ -65,9 +65,9 @@ Regles:
 - Les segments dynamiques stockent leurs regles et peuvent recalculer un cache `segment_memberships`.
 - Les segments statiques stockent leurs membres via `segment_memberships`.
 
-## QR Feedback
+## Opinbase
 
-Le QR Feedback reste la source principale des soumissions.
+Le Opinbase reste la source principale des soumissions.
 
 Flow attendu:
 

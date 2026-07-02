@@ -682,7 +682,7 @@ async function handleStart(msg: TelegramMessage) {
       console.error("[telegram:link:error]", error);
       await bot.sendMessage(
         chatId,
-        "Lien Telegram invalide ou expire. Relancez la connexion depuis QrFeedback.",
+        "Lien Telegram invalide ou expire. Relancez la connexion depuis Opinbase.",
       );
     }
     return;
@@ -693,10 +693,10 @@ async function handleStart(msg: TelegramMessage) {
   if (!dbUser) {
     await sendTelegramKeyboard(
       String(chatId),
-      "<b>Bienvenue sur QrFeedback</b>\n\nCreez un QR rapidement ou connectez votre compte pour gerer avis, QR codes et notifications depuis Telegram.",
+      "<b>Bienvenue sur Opinbase</b>\n\nCreez un QR rapidement ou connectez votre compte pour gerer avis, QR codes et notifications depuis Telegram.",
       [
         [{ text: "➕ Creer un QR", callback_data: "guest_create_qr" }],
-        [frontendButton("🔗 Se connecter a QrFeedback", "/login?redirect=/settings")],
+        [frontendButton("🔗 Se connecter a Opinbase", "/login?redirect=/settings")],
       ],
     );
     return;
@@ -708,7 +708,7 @@ async function handleStart(msg: TelegramMessage) {
 async function sendMainMenu(chatId: number, messageId?: number) {
   const dbUser = await findUserByTelegram(chatId);
   const company = dbUser?.company ? await Company.findById(dbUser.company) : null;
-  const companyName = company?.name || "QrFeedback";
+  const companyName = company?.name || "Opinbase";
   const text = `<b>Menu principal</b>\n\n${escapeHtml(companyName)}, que souhaitez-vous faire ?`;
 
   if (messageId) {
@@ -725,7 +725,7 @@ async function handleHelp(msg: TelegramMessage) {
 }
 
 async function sendHelp(chatId: number, messageId?: number) {
-  const text = `<b>Aide QrFeedback</b>
+  const text = `<b>Aide Opinbase</b>
 
 Commandes utiles:
 /avis - avis recents et filtres
@@ -1571,7 +1571,7 @@ async function toggleCompanyNotification(
 async function handleConnectTelegramCallback(chatId: number) {
   await sendTelegramKeyboard(
     String(chatId),
-    "<b>Se connecter a QrFeedback</b>\n\nConnectez-vous puis ouvrez Parametres > Notifications pour lier Telegram.",
+    "<b>Se connecter a Opinbase</b>\n\nConnectez-vous puis ouvrez Parametres > Notifications pour lier Telegram.",
     [[frontendButton("Se connecter", "/login?redirect=/settings")]],
   );
 }

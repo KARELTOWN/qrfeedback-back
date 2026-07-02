@@ -1,4 +1,4 @@
-# QR Feedback Backend
+# Opinbase Backend
 
 API Node.js/Express en TypeScript pour une plateforme gratuite de collecte d'avis clients par QR code.
 
@@ -80,7 +80,7 @@ HTML `emailTemplate` et `smsTemplate`. Les variables se saisissent sous la forme
 `#rating` ou `#code`. Elles sont remplacées au moment de l'envoi. Les SMS sont définis et
 prévisualisables, mais aucun envoi SMS n'est activé à ce stade.
 
-Chaque e-mail est enveloppé dans un layout Pug commun (en-tête QrFeedback, titre et corps), ce
+Chaque e-mail est enveloppé dans un layout Pug commun (en-tête Opinbase, titre et corps), ce
 qui évite de devoir reproduire la mise en page dans chaque modèle.
 
 Verification :
@@ -114,7 +114,7 @@ SMTP_PASS=pass
 TURNSTILE_SECRET_KEY=
 
 TELEGRAM_BOT_TOKEN=
-TELEGRAM_BOT_USERNAME=QrFeedback_Bot
+TELEGRAM_BOT_USERNAME=Opinbasebot
 TELEGRAM_WEBHOOK_URL=
 TELEGRAM_WEBAPP_URL=
 TELEGRAM_AUTH_MAX_AGE_SECONDS=3600
@@ -122,7 +122,7 @@ TELEGRAM_AUTH_MAX_AGE_SECONDS=3600
 
 ## Modele produit
 
-QrFeedback est gratuit et illimite. Les routes de paiement existent uniquement pour compatibilite avec d'anciens clients API et repondent `410 Gone`.
+Opinbase est gratuit et illimite. Les routes de paiement existent uniquement pour compatibilite avec d'anciens clients API et repondent `410 Gone`.
 
 Les notifications temps reel sont concentrees sur Telegram. L'email reste le canal par defaut.
 

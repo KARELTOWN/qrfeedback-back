@@ -1,7 +1,7 @@
 import { HttpError } from '../utils/httpError.js';
 
 function paymentDisabled(): never {
-  throw new HttpError(410, 'Les paiements sont desactives: QrFeedback est gratuit.');
+  throw new HttpError(410, 'Les paiements sont desactives: Opinbase est gratuit.');
 }
 
 export async function createPayment() {

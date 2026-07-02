@@ -1,4 +1,4 @@
-# Regles de style de code - QR Feedback
+# Regles de style de code - Opinbase
 
 Statut: document de reference pour le backend `back/` et le frontend `front/`.
 Ces conventions priment pour les nouvelles features et les refactors touches par une tache.

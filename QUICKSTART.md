@@ -7,8 +7,8 @@
 1. Ouvrez Telegram
 2. Cherchez **@BotFather**
 3. Envoyez `/newbot`
-4. Nom du bot: `QrFeedback`
-5. Username unique: `QrFeedbackBot` (ou `YourName_QrFeedbackBot`)
+4. Nom du bot: `Opinbase`
+5. Username unique: `OpinbaseBot` (ou `YourName_OpinbaseBot`)
 
 ✅ BotFather vous donne un **TOKEN**. Exemple:
 
@@ -45,7 +45,7 @@ Le bot est maintenant actif! 🎉
 ### Étape 4: Tester (30 sec)
 
 1. Allez sur Telegram
-2. Cherchez votre bot (@YourName_QrFeedbackBot)
+2. Cherchez votre bot (@YourName_OpinbaseBot)
 3. Tapez `/start`
 4. Le menu s'affiche!
 

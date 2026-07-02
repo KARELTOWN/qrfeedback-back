@@ -33,7 +33,7 @@ export const env = {
     secure: process.env.SMTP_SECURE === "true",
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
-    from: process.env.MAIL_FROM || "QR Feedback <no-reply@example.com>",
+    from: process.env.MAIL_FROM || "Opinbase <no-reply@example.com>",
   },
   turnstile: {
     secretKey: process.env.TURNSTILE_SECRET_KEY || "",
@@ -51,7 +51,7 @@ export const env = {
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || "",
-    botUsername: process.env.TELEGRAM_BOT_USERNAME || "QrFeedback_Bot",
+    botUsername: process.env.TELEGRAM_BOT_USERNAME || "Opinbasebot",
     webhookUrl: process.env.TELEGRAM_WEBHOOK_URL || "",
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
     webAppUrl: process.env.TELEGRAM_WEBAPP_URL || "",
@@ -63,6 +63,6 @@ export const env = {
   fasterMessage: {
     apiKey: process.env.FASTERMESSAGE_API_KEY || "",
     baseUrl: process.env.FASTERMESSAGE_BASE_URL || "https://api.fastermessage.com",
-    senderId: process.env.FASTERMESSAGE_SENDER_ID || "QrFeedback",
+    senderId: process.env.FASTERMESSAGE_SENDER_ID || "Opinbase",
   },
 };

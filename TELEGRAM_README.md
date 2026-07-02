@@ -1,8 +1,8 @@
-# 🤖 Intégration Telegram - QrFeedback
+# 🤖 Intégration Telegram - Opinbase
 
 ## Vue d'ensemble
 
-QrFeedback est maintenant intégré avec Telegram! Les utilisateurs peuvent:
+Opinbase est maintenant intégré avec Telegram! Les utilisateurs peuvent:
 
 - Recevoir les notifications d'avis par Telegram
 - Gérer leurs QR codes directement via le bot
@@ -271,4 +271,4 @@ Pour toute aide:
 
 **Version**: 1.0.0
 **Date**: 2024-06-14
-**Auteur**: QrFeedback Team
+**Auteur**: Opinbase Team

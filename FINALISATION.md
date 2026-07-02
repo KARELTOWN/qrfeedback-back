@@ -1,4 +1,4 @@
-# ✅ FINALISATION - Intégration Telegram QrFeedback
+# ✅ FINALISATION - Intégration Telegram Opinbase
 
 ## 📊 État du projet
 
