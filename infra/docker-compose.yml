@@ -1,0 +1,90 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: qrfeedback-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-qr_feedback}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+    command: ["mongod", "--auth"]
+
+  redis:
+    image: redis:7-alpine
+    container_name: qrfeedback-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  typesense:
+    image: typesense/typesense:30.2
+    container_name: qrfeedback-typesense
+    restart: unless-stopped
+    command: "--data-dir /data --api-key=${TYPESENSE_API_KEY} --enable-cors"
+    volumes:
+      - typesense_data:/data
+
+  backend:
+    build: ./back
+    container_name: qrfeedback-backend
+    restart: unless-stopped
+    env_file: ./back/.env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_DATABASE:-qr_feedback}?authSource=admin
+      REDIS_URL: redis://redis:6379
+      TYPESENSE_HOST: typesense
+      TYPESENSE_PORT: 8108
+      TYPESENSE_PROTOCOL: http
+    ports:
+      - "127.0.0.1:4100:4000"
+    volumes:
+      - backend_storage:/app/storage
+      - backend_output:/app/output
+    depends_on:
+      - mongodb
+      - redis
+      - typesense
+
+  worker:
+    build: ./back
+    container_name: qrfeedback-worker
+    restart: unless-stopped
+    command: npm run worker
+    env_file: ./back/.env
+    environment:
+      NODE_ENV: production
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_DATABASE:-qr_feedback}?authSource=admin
+      REDIS_URL: redis://redis:6379
+      TYPESENSE_HOST: typesense
+      TYPESENSE_PORT: 8108
+      TYPESENSE_PROTOCOL: http
+    volumes:
+      - backend_storage:/app/storage
+      - backend_output:/app/output
+    depends_on:
+      - mongodb
+      - redis
+      - typesense
+
+  frontend:
+    build:
+      context: ./front
+    container_name: qrfeedback-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8180:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
+  redis_data:
+  typesense_data:
+  backend_storage:
+  backend_output:
+

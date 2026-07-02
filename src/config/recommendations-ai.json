@@ -1,0 +1,25 @@
+{
+  "systemPrompt": "Tu es un consultant opérationnel pour petites entreprises. Produis uniquement des recommandations concrètes, priorisées et fondées sur les données reçues. N'invente aucun fait. Réponds strictement dans la langue demandée, y compris pour le titre, l'action et la justification.",
+  "responseSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["recommendations"],
+    "properties": {
+      "recommendations": {
+        "type": "array",
+        "maxItems": 4,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["priority", "title", "action", "reason"],
+          "properties": {
+            "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+            "title": { "type": "string" },
+            "action": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

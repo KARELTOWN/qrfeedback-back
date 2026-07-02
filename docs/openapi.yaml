@@ -1,0 +1,229 @@
+openapi: 3.0.3
+info:
+  title: QR Feedback API
+  version: 1.0.0
+  description: API gratuite de collecte d'avis par QR code, avec notifications email et Telegram.
+servers:
+  - url: http://localhost:4000
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ReviewInput:
+      type: object
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        serviceFeedback:
+          type: string
+        turnstileToken:
+          type: string
+        customAnswers:
+          type: array
+          items:
+            type: object
+            properties:
+              questionId:
+                type: string
+              value: {}
+    QrCodeInput:
+      type: object
+      properties:
+        label:
+          type: string
+        isActive:
+          type: boolean
+    ModerationInput:
+      type: object
+      properties:
+        moderationStatus:
+          type: string
+          enum: [new, seen, in_progress, resolved, archived]
+        isHidden:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        internalNote:
+          type: string
+        responseText:
+          type: string
+paths:
+  /health:
+    get:
+      security: []
+      summary: Healthcheck rapide
+      responses:
+        "200":
+          description: OK
+  /health/details:
+    get:
+      security: []
+      summary: Healthcheck detaille
+      responses:
+        "200":
+          description: Services disponibles
+        "503":
+          description: Un service est indisponible
+  /api/companies/register:
+    post:
+      security: []
+      summary: Inscrire une entreprise et generer son QR principal
+      responses:
+        "201":
+          description: Entreprise creee
+  /api/companies/{slug}:
+    get:
+      security: []
+      summary: Lire les informations publiques d'une entreprise ou d'un QR
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entreprise publique
+  /api/reviews/{slug}:
+    post:
+      security: []
+      summary: Deposer un avis public
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewInput"
+      responses:
+        "201":
+          description: Avis cree
+  /api/dashboard/reviews:
+    get:
+      summary: Lister les avis avec filtres
+      parameters:
+        - in: query
+          name: qrCodeId
+          schema:
+            type: string
+        - in: query
+          name: rating
+          schema:
+            type: integer
+        - in: query
+          name: moderationStatus
+          schema:
+            type: string
+        - in: query
+          name: startDate
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: endDate
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Liste paginee
+  /api/dashboard/reviews/{reviewId}/moderation:
+    patch:
+      summary: Moderer un avis
+      parameters:
+        - in: path
+          name: reviewId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModerationInput"
+      responses:
+        "200":
+          description: Avis mis a jour
+  /api/dashboard/stats:
+    get:
+      summary: Statistiques dashboard avec comparaison de periode et metriques par QR
+      responses:
+        "200":
+          description: Statistiques
+  /api/qrcodes:
+    get:
+      summary: Lister les QR codes de l'entreprise
+      responses:
+        "200":
+          description: Liste paginee
+    post:
+      summary: Creer un QR code
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QrCodeInput"
+      responses:
+        "201":
+          description: QR cree
+  /api/qrcodes/{qrCodeId}:
+    patch:
+      summary: Editer le label ou le statut actif d'un QR
+      parameters:
+        - in: path
+          name: qrCodeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: QR mis a jour
+    delete:
+      summary: Desactiver un QR code
+      parameters:
+        - in: path
+          name: qrCodeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: QR desactive
+  /api/qrcodes/{qrCodeId}/download.png:
+    get:
+      summary: Telecharger le QR en PNG
+      parameters:
+        - in: path
+          name: qrCodeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image PNG
+  /api/qrcodes/{qrCodeId}/download.pdf:
+    get:
+      summary: Telecharger le QR en PDF
+      parameters:
+        - in: path
+          name: qrCodeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PDF
