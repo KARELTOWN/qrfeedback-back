@@ -237,6 +237,9 @@ export async function login({ email, password }: LoginInput) {
     throw new HttpError(403, 'Compte desactive.');
   }
 
+  user.lastLoginAt = new Date();
+  await user.save();
+
   return serializeAuth(user);
 }
 
@@ -251,6 +254,8 @@ async function telegramAuth({ initData, email, companyName }: TelegramAuthInput)
   const existingTelegramUser = await User.findOne({ telegramId: telegram.id }).populate('company');
   if (existingTelegramUser) {
     if (existingTelegramUser.isActive === false) throw new HttpError(403, 'Compte desactive.');
+    existingTelegramUser.lastLoginAt = new Date();
+    await existingTelegramUser.save();
     return { ...(await serializeAuth(existingTelegramUser)), isNewUser: false };
   }
 
@@ -387,6 +392,7 @@ export async function verifyOtp({ email, code, purpose }: VerifyOtpInput) {
   user.otpHash = undefined;
   user.otpPurpose = undefined;
   user.otpExpiresAt = undefined;
+  user.lastLoginAt = new Date();
   await user.save();
 
   return serializeAuth(user);

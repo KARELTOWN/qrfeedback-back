@@ -1,11 +1,13 @@
 import { Company } from '../models/Company.js';
 import { CompanyQrCode } from '../models/CompanyQrCode.js';
+import { QrScan } from '../models/QrScan.js';
 import { Review } from '../models/Review.js';
 import { User } from '../models/User.js';
 import { HttpError } from '../utils/httpError.js';
 import { generateStrongPassword, hashPassword } from '../utils/password.js';
 import { sendTemplateMail } from './notificationTemplate.service.js';
 import { buildPagination, normalizePagination, type PaginationInput } from '../utils/pagination.js';
+import { logger } from '../utils/logger.js';
 
 export async function getAdminStats() {
   const [totalReviews, extraQrCodes, companies, totalUsers] = await Promise.all([
@@ -109,6 +111,25 @@ export async function setUserActive(userId: string, isActive: boolean) {
   user.tokenVersion = (user.tokenVersion || 0) + 1;
   await user.save();
 
+  try {
+    await sendTemplateMail({
+      name: 'account-status-changed',
+      to: user.email,
+      variables: {
+        statusLabel: isActive ? 'reactive' : 'desactive',
+        statusMessage: isActive
+          ? 'Vous pouvez de nouveau vous connecter a votre espace Opinbase.'
+          : "Vous ne pouvez plus vous connecter tant qu'il n'a pas ete reactive. Contactez le support si vous pensez qu'il s'agit d'une erreur."
+      }
+    });
+  } catch (error) {
+    logger.warn('notification:account-status:failed', {
+      userId: String(user._id),
+      isActive,
+      error: error instanceof Error ? error.message : 'Erreur inconnue'
+    });
+  }
+
   return {
     id: user._id,
     isActive: user.isActive
@@ -123,57 +144,82 @@ export async function listQrRequests({
 }: PaginationInput & { accountFilter?: 'all' | 'with' | 'without'; search?: string }) {
   const pagination = normalizePagination({ page, limit });
   const filter = { slug: { $ne: 'qr-feedback-admin' } };
-  const [total, companies, users] = await Promise.all([
-    Company.countDocuments(filter),
-    Company.find(filter).select('name email feedbackUrl user createdAt').sort({ createdAt: -1 }).lean(),
-    User.find({ roleId: { $ne: 'superadministrateur' } }).select('email').lean()
+  const [companies, users] = await Promise.all([
+    Company.find(filter).select('name email feedbackUrl user createdAt').sort({ createdAt: 1 }).lean(),
+    User.find({ roleId: { $ne: 'superadministrateur' } }).select('email isActive lastLoginAt').lean()
   ]);
-  const accountEmails = new Set(users.map((user) => user.email.toLowerCase()));
-  const userIdByEmail = new Map(users.map((user) => [user.email.toLowerCase(), String(user._id)]));
-  const normalizedSearch = search.trim().toLowerCase();
-  const requests = companies.map((company) => {
-    const email = company.email.toLowerCase().trim();
-    const userId = company.user ? String(company.user) : userIdByEmail.get(email);
+  const userByEmail = new Map(users.map((user) => [user.email.toLowerCase(), user]));
 
-    return {
-      _id: company._id,
-      name: company.name,
+  const grouped = new Map<string, {
+    email: string;
+    name: string;
+    createdAt: Date;
+    qrRequestsCount: number;
+    userId?: string;
+    isActive: boolean;
+    lastLoginAt: Date | null;
+    status: 'active' | 'inactive' | 'disabled' | 'none';
+  }>();
+
+  for (const company of companies) {
+    const email = company.email.toLowerCase().trim();
+    const account = userByEmail.get(email);
+    const existing = grouped.get(email);
+
+    if (existing) {
+      existing.qrRequestsCount += 1;
+      continue;
+    }
+
+    let status: 'active' | 'inactive' | 'disabled' | 'none' = 'none';
+    if (account) {
+      status = account.isActive === false ? 'disabled' : account.lastLoginAt ? 'active' : 'inactive';
+    }
+
+    grouped.set(email, {
       email: company.email,
-      feedbackUrl: company.feedbackUrl,
+      name: company.name,
       createdAt: company.createdAt,
-      hasAccount: Boolean(userId) || accountEmails.has(email),
-      userId
-    };
-  }).filter((company) => {
+      qrRequestsCount: 1,
+      userId: account ? String(account._id) : undefined,
+      isActive: account ? account.isActive !== false : false,
+      lastLoginAt: account?.lastLoginAt ?? null,
+      status
+    });
+  }
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const rows = Array.from(grouped.values()).filter((row) => {
     const matchesAccount =
       accountFilter === 'all' ||
-      (accountFilter === 'with' && company.hasAccount) ||
-      (accountFilter === 'without' && !company.hasAccount);
+      (accountFilter === 'with' && row.status !== 'none') ||
+      (accountFilter === 'without' && row.status === 'none');
     const matchesSearch =
       !normalizedSearch ||
-      company.name.toLowerCase().includes(normalizedSearch) ||
-      company.email.toLowerCase().includes(normalizedSearch);
+      row.name.toLowerCase().includes(normalizedSearch) ||
+      row.email.toLowerCase().includes(normalizedSearch);
     return matchesAccount && matchesSearch;
-  });
+  }).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   return {
-    total,
-    companies: requests.slice(pagination.skip, pagination.skip + pagination.limit),
-    pagination: buildPagination(requests.length, pagination.page, pagination.limit)
+    total: rows.length,
+    companies: rows.slice(pagination.skip, pagination.skip + pagination.limit),
+    pagination: buildPagination(rows.length, pagination.page, pagination.limit)
   };
 }
 
 export async function getUserDetails(userId: string) {
   const user = await User.findOne({ _id: userId, roleId: { $ne: 'superadministrateur' } })
     .populate('company', 'name email createdAt')
-    .select('email roleId isActive emailVerified mustChangePassword company createdAt')
+    .select('email roleId isActive emailVerified mustChangePassword lastLoginAt company createdAt')
     .lean();
   if (!user) throw new HttpError(404, 'Utilisateur introuvable.');
 
   const company = user.company as unknown as { _id: unknown; name: string; email: string; createdAt?: Date };
-  const [extraQrCodes, reviewsCount] = await Promise.all([
+  const [extraQrCodes, reviewsCount, scanCount] = await Promise.all([
     CompanyQrCode.countDocuments({ company: company._id }),
-    Review.countDocuments({ company: company._id })
+    Review.countDocuments({ company: company._id }),
+    QrScan.countDocuments({ company: company._id })
   ]);
 
   return {
@@ -181,6 +227,7 @@ export async function getUserDetails(userId: string) {
     company,
     qrCodesCount: extraQrCodes + 1,
     reviewsCount,
+    scanCount,
     remainingCredits: null,
     revenueFcfa: 0,
     payments: []

@@ -446,6 +446,11 @@ export function getNotificationPreferences(company: HydratedDocument<ICompany>) 
     smsEnabled: company.notificationPreferences?.smsEnabled === true,
     managerPhone: company.notificationPreferences?.managerPhone ?? null,
     badReviewThreshold: company.notificationPreferences?.badReviewThreshold ?? 2,
+    autoReplyEnabled: company.notificationPreferences?.autoReplyEnabled !== false,
+    autoReplyMode: company.notificationPreferences?.autoReplyMode === 'ai' ? 'ai' : 'manual',
+    autoReplySatisfiedThreshold: company.notificationPreferences?.autoReplySatisfiedThreshold ?? 4,
+    autoReplySatisfiedMessage: company.notificationPreferences?.autoReplySatisfiedMessage ?? '',
+    autoReplyUnsatisfiedMessage: company.notificationPreferences?.autoReplyUnsatisfiedMessage ?? '',
   };
 }
 
@@ -461,12 +466,21 @@ export async function updateNotificationPreferences(company: HydratedDocument<IC
     ? Math.floor(source.badReviewThreshold)
     : current.badReviewThreshold ?? 2;
 
+  const autoReplySatisfiedThreshold = typeof source.autoReplySatisfiedThreshold === 'number' && source.autoReplySatisfiedThreshold >= 1 && source.autoReplySatisfiedThreshold <= 5
+    ? Math.floor(source.autoReplySatisfiedThreshold)
+    : current.autoReplySatisfiedThreshold ?? 4;
+
   company.set('notificationPreferences', {
     emailEnabled: typeof source.emailEnabled === 'boolean' ? source.emailEnabled : current.emailEnabled !== false,
     telegramEnabled: typeof source.telegramEnabled === 'boolean' ? source.telegramEnabled : current.telegramEnabled !== false,
     smsEnabled: typeof source.smsEnabled === 'boolean' ? source.smsEnabled : current.smsEnabled === true,
     managerPhone,
     badReviewThreshold,
+    autoReplyEnabled: typeof source.autoReplyEnabled === 'boolean' ? source.autoReplyEnabled : current.autoReplyEnabled !== false,
+    autoReplyMode: source.autoReplyMode === 'ai' ? 'ai' : source.autoReplyMode === 'manual' ? 'manual' : (current.autoReplyMode ?? 'manual'),
+    autoReplySatisfiedThreshold,
+    autoReplySatisfiedMessage: typeof source.autoReplySatisfiedMessage === 'string' ? source.autoReplySatisfiedMessage.trim() : current.autoReplySatisfiedMessage ?? '',
+    autoReplyUnsatisfiedMessage: typeof source.autoReplyUnsatisfiedMessage === 'string' ? source.autoReplyUnsatisfiedMessage.trim() : current.autoReplyUnsatisfiedMessage ?? '',
   });
   await company.save();
   return getNotificationPreferences(company);

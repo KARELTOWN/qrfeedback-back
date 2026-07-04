@@ -1088,9 +1088,7 @@ async function sendStatsForChat(chatId: number, messageId?: number) {
 Avis collectes: <b>${stats.count}</b>
 Scans: <b>${stats.scanCount}</b>
 Conversion scan vers avis: <b>${formatPercent(stats.conversionRate)}</b>
-Repere: <b>10% a 30%</b> est generalement sain.
-Note moyenne: <b>${stats.averageRating}/5</b>
-Application: <b>gratuite</b>`;
+Note moyenne: <b>${stats.averageRating}/5</b>`;
 
   const keyboard = navigationKeyboard(undefined, [[frontendButton("Ouvrir le dashboard", "/dashboard")]]);
 
@@ -1603,7 +1601,6 @@ Statut: <b>${qr.isActive ? "Actif" : "Inactif"}</b>
 Avis: <b>${reviewCount}</b>
 Scans: <b>${scanCount}</b>
 Conversion scan vers avis: <b>${formatPercent(conversion)}</b>
-Repere: <b>10% a 30%</b> est generalement sain.
 Email: <b>${prefs?.emailEnabled !== false ? "active" : "desactive"}</b>
 Telegram: <b>${prefs?.telegramEnabled !== false ? "active" : "desactive"}</b>
 

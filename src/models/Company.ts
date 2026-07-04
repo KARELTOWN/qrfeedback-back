@@ -62,6 +62,11 @@ const notificationPreferencesSchema = new mongoose.Schema(
     smsEnabled: { type: Boolean, default: false },
     managerPhone: { type: String, trim: true },
     badReviewThreshold: { type: Number, default: 2, min: 1, max: 5 },
+    autoReplyEnabled: { type: Boolean, default: true },
+    autoReplyMode: { type: String, enum: ["ai", "manual"], default: "manual" },
+    autoReplySatisfiedThreshold: { type: Number, default: 4, min: 1, max: 5 },
+    autoReplySatisfiedMessage: { type: String, trim: true },
+    autoReplyUnsatisfiedMessage: { type: String, trim: true },
   },
   { _id: false },
 );

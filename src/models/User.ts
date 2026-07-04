@@ -22,6 +22,7 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
     isActive: { type: Boolean, default: true },
+    lastLoginAt: { type: Date },
     tokenVersion: { type: Number, default: 0 },
     resetTokenHash: { type: String },
     resetTokenExpiresAt: { type: Date },

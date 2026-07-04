@@ -15,6 +15,11 @@ import {
 import { sendReviewNotification } from "./notification.service.js";
 import { logger } from "../utils/logger.js";
 import { publishOutboxEvent } from "./outbox.service.js";
+import { env } from "../config/env.js";
+
+function companyDashboardReviewsUrl() {
+  return `${env.frontendUrl.replace(/\/$/, "")}/dashboard/reviews`;
+}
 
 type ReviewInput = {
   serviceFeedback?: string;
@@ -54,7 +59,7 @@ function reviewEmailHtml(company: HydratedDocument<ICompany>, review: HydratedDo
       <h2>Nouvel avis pour ${company.name}</h2>
       ${rows}
       <p style="margin-top: 24px;">
-        <a href="${company.feedbackUrl.replace("/avis/", "/dashboard/reviews")}" style="display: inline-block; background: #0f766e; color: #fff; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: 700;">Voir mes avis</a>
+        <a href="${companyDashboardReviewsUrl()}" style="display: inline-block; background: #0f766e; color: #fff; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: 700;">Voir mes avis</a>
       </p>
     </div>
   `;
@@ -79,7 +84,7 @@ async function notifyByEmail(
         companyName: company.name,
         rating: review.rating,
         serviceFeedback: review.serviceFeedback || "Sans commentaire",
-        dashboardUrl: company.feedbackUrl.replace("/avis/", "/dashboard/reviews"),
+        dashboardUrl: companyDashboardReviewsUrl(),
       },
     });
 

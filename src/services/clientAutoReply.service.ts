@@ -1,8 +1,40 @@
-import { Company } from "../models/Company.js";
-import { Review } from "../models/Review.js";
+import type { HydratedDocument } from "mongoose";
+import { Company, type ICompany } from "../models/Company.js";
+import { Review, type IReview } from "../models/Review.js";
 import { sendTemplateMail } from "./notificationTemplate.service.js";
 import { sendSms } from "./sms.service.js";
+import { suggestReviewReply } from "./aiSuggestion.service.js";
 import { logger } from "../utils/logger.js";
+
+const DEFAULT_SATISFIED_MESSAGE =
+  "Merci d'avoir pris le temps de partager votre expérience. Votre avis est précieux et nous aide à améliorer continuellement notre service. Nous espérons vous revoir bientôt !";
+const DEFAULT_UNSATISFIED_MESSAGE =
+  "Merci pour votre retour. Nous sommes désolés que votre expérience n'ait pas été à la hauteur de vos attentes et nous en tenons compte pour nous améliorer. N'hésitez pas à nous recontacter si vous souhaitez en discuter.";
+
+function isSatisfied(company: HydratedDocument<ICompany>, rating: number) {
+  const threshold = company.notificationPreferences?.autoReplySatisfiedThreshold ?? 4;
+  return rating >= threshold;
+}
+
+async function resolveReplyBody(company: HydratedDocument<ICompany>, review: HydratedDocument<IReview>) {
+  const prefs = company.notificationPreferences;
+  const satisfied = isSatisfied(company, review.rating);
+
+  if (prefs?.autoReplyMode === "ai") {
+    try {
+      const { suggestions } = await suggestReviewReply(company, String(review._id));
+      if (suggestions[0]) return suggestions[0];
+    } catch (error) {
+      logger.warn("client-reply:ai-fallback", {
+        reviewId: String(review._id),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const configured = satisfied ? prefs?.autoReplySatisfiedMessage : prefs?.autoReplyUnsatisfiedMessage;
+  return configured?.trim() || (satisfied ? DEFAULT_SATISFIED_MESSAGE : DEFAULT_UNSATISFIED_MESSAGE);
+}
 
 export async function deliverClientEmailReply(reviewId: string) {
   const review = await Review.findById(reviewId);
@@ -16,11 +48,18 @@ export async function deliverClientEmailReply(reviewId: string) {
   const company = await Company.findById(review.company);
   if (!company) return;
 
+  if (company.notificationPreferences?.autoReplyEnabled === false) {
+    review.clientEmailStatus = "skipped";
+    await review.save();
+    return;
+  }
+
   try {
+    const replyBody = await resolveReplyBody(company, review);
     await sendTemplateMail({
-      name: "review-client-email-reply",
+      name: "review-client-auto-reply",
       to: review.clientEmail,
-      variables: { companyName: company.name },
+      variables: { companyName: company.name, replyBody },
     });
     review.clientEmailStatus = "sent";
     review.clientEmailError = undefined;
