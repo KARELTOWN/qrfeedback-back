@@ -159,7 +159,7 @@ function buildReviewTelegramKeyboard(
   review: HydratedDocument<IReview>,
 ): Array<Array<{ text: string; callback_data?: string; url?: string }>> {
   const reviewId = String(review._id);
-  const dashboardUrl = `${env.frontendUrl.replace(/\/$/, "")}/dashboard/reviews`;
+  const dashboardUrl = `${env.frontendUrl.replace(/\/$/, "")}/reviews`;
   const keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> = [
     [
       { text: "Voir details", callback_data: `review_detail_${reviewId}` },

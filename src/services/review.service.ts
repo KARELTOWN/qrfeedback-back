@@ -18,7 +18,7 @@ import { publishOutboxEvent } from "./outbox.service.js";
 import { env } from "../config/env.js";
 
 function companyDashboardReviewsUrl() {
-  return `${env.frontendUrl.replace(/\/$/, "")}/dashboard/reviews`;
+  return `${env.frontendUrl.replace(/\/$/, "")}/reviews`;
 }
 
 type ReviewInput = {

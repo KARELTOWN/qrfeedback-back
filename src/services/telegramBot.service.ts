@@ -206,7 +206,7 @@ function reviewActionKeyboard(reviewId: string): TelegramInlineButton[][] {
       { text: "📝 Ajouter une note", callback_data: `review_reply_${reviewId}` },
       { text: "🏷️ Ajouter un tag", callback_data: `review_tag_${reviewId}` },
     ],
-    [frontendButton("🖥️ Ouvrir le dashboard", "/dashboard/reviews")],
+    [frontendButton("🖥️ Ouvrir le dashboard", "/reviews")],
     [{ text: "◀️ Retour", callback_data: "my_reviews" }],
     [{ text: "🏠 Menu principal", callback_data: "main_menu" }],
   ];
@@ -1888,7 +1888,7 @@ Lien:
         [{ text: "⭐ Mes avis", callback_data: `qr_reviews_${qrCode._id}` }],
         [{ text: "🤖 Analyse IA", callback_data: `qr_ai_${createQrActionToken(qrCode._id, qrCode.label || qrCode.slug || "QR Code")}` }],
         [{ text: "➕ Creer un autre QR", callback_data: "create_qr" }],
-        [frontendButton("Ouvrir le dashboard", "/dashboard/qr-codes")],
+        [frontendButton("Ouvrir le dashboard", "/qrcodes")],
       ]),
     );
   } catch (error) {
