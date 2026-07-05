@@ -3,26 +3,36 @@ services:
     build: .
     ports:
       - "4000:4000"
+    env_file:
+      - .env
     environment:
-      MONGO_URI: mongodb://admin:admin@mongodb:27017/qr_feedback?authSource=admin
+      MONGO_URI: mongodb://admin:admin@mongodb:27017/qrfeedback?authSource=admin
       REDIS_URL: redis://redis:6379
       TYPESENSE_HOST: typesense
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
     depends_on:
       - mongodb
       - redis
       - typesense
+      - mailpit
 
   worker:
     build: .
     command: npm run worker
+    env_file:
+      - .env
     environment:
-      MONGO_URI: mongodb://admin:admin@mongodb:27017/qr_feedback?authSource=admin
+      MONGO_URI: mongodb://admin:admin@mongodb:27017/qrfeedback?authSource=admin
       REDIS_URL: redis://redis:6379
       TYPESENSE_HOST: typesense
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
     depends_on:
       - mongodb
       - redis
       - typesense
+      - mailpit
 
   mongodb:
     image: mongo:latest
