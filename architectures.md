@@ -3,6 +3,7 @@
 Statut: document de reference pour le backend `back/` et le frontend `front/`.
 Toute nouvelle fonctionnalite doit respecter ces regles sauf decision technique explicite.
 
+
 Ce document fixe les regles a suivre pour le reste du projet. Il couvre le backend Express/TypeScript/Mongoose, le frontend Vue/Vite et les futurs modules CRM, segments, automation, inbox et WhatsApp Cloud API.
 
 ## Principes directeurs
