@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import * as Sentry from '@sentry/node';
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { getHealthStatus } from "./services/health.service.js";
@@ -68,4 +69,5 @@ app.use("/api/webhooks/telegram", telegramRoutes);
 app.use('/api/public/testimonials', testimonialsRoutes);
 app.use('/api', analysisRoutes);
 
+Sentry.setupExpressErrorHandler(app);
 app.use(errorHandler);
